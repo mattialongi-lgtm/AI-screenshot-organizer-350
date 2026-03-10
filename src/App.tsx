@@ -44,25 +44,14 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-import { useAuthState } from 'react-firebase-hooks/auth';
-import { auth, db, storage } from './lib/firebase';
-import { 
-  collection, 
-  query, 
-  where, 
-  getDocs, 
-  addDoc, 
-  deleteDoc, 
-  doc, 
-  updateDoc, 
-  onSnapshot,
-  setDoc
-} from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
+import { supabase, isSupabaseConfigured, useSupabaseAuth } from './lib/supabase';
 import { AuthButton } from './components/AuthButton';
+import { SourcesPage } from './pages/Sources';
+import { Cloud } from 'lucide-react';
 
 export default function App() {
-  const [user] = useAuthState(auth);
+  const [currentPage, setCurrentPage] = useState<'home' | 'sources'>('home');
+  const { user, loading: authLoading } = useSupabaseAuth();
   const [screenshots, setScreenshots] = useState<ScreenshotMetadata[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -76,23 +65,88 @@ export default function App() {
   const [isUploading, setIsUploading] = useState(false);
   const [darkMode, setDarkMode] = useState(true);
 
-  // Load data from IndexedDB or Firestore
+  // WebSocket for real-time updates
   useEffect(() => {
-    if (user) {
-      // Load from Firestore
-      const q = query(collection(db, 'screenshots'), where('userId', '==', user.uid));
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        const cloudData: ScreenshotMetadata[] = snapshot.docs.map(docSnap => {
-          const data = docSnap.data();
-          return {
-            ...data,
-            id: docSnap.id,
-          } as ScreenshotMetadata;
-        });
-        setScreenshots(cloudData.sort((a, b) => b.createdAt - a.createdAt));
-        setLoading(false);
-      });
-      return () => unsubscribe();
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${protocol}//${window.location.host}`);
+    
+    ws.onmessage = (event) => {
+      try {
+        const message = JSON.parse(event.data);
+        if (message.type === 'icloud:newFile' || message.type === 'google:newFile') {
+          const newScreenshot = message.data;
+          setScreenshots(prev => {
+            if (prev.some(s => s.id === newScreenshot.id)) return prev;
+            return [newScreenshot, ...prev];
+          });
+        }
+      } catch (e) {
+        console.error("WS message error:", e);
+      }
+    };
+
+    return () => ws.close();
+  }, []);
+
+  // Load data from IndexedDB or Supabase
+  useEffect(() => {
+    if (user && isSupabaseConfigured) {
+      // Subscribe to Supabase real-time updates for this user
+      const channel = supabase
+        .channel('screenshots-changes')
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'screenshots',
+            filter: `userId=eq.${user.id}`
+          },
+          (payload) => {
+            if (payload.eventType === 'INSERT') {
+              const newScreenshot = payload.new as ScreenshotMetadata;
+              setScreenshots(prev => {
+                if (prev.some(s => s.id === newScreenshot.id)) return prev;
+                return [newScreenshot, ...prev];
+              });
+            } else if (payload.eventType === 'UPDATE') {
+              const updated = payload.new as ScreenshotMetadata;
+              setScreenshots(prev => prev.map(s => s.id === updated.id ? updated : s));
+            } else if (payload.eventType === 'DELETE') {
+              const deletedId = payload.old.id;
+              setScreenshots(prev => prev.filter(s => s.id !== deletedId));
+            }
+          }
+        )
+        .subscribe();
+
+      // Initial fetch from Supabase
+      const fetchCloudScreenshots = async () => {
+        const { data, error } = await supabase
+          .from('screenshots')
+          .select('*')
+          .eq('userId', user.id)
+          .order('createdAt', { ascending: false });
+        
+        if (data && !error) {
+          setScreenshots(prev => {
+            const combined = [...data];
+            prev.forEach(p => {
+              if (!combined.some(c => c.id === p.id)) combined.push(p);
+            });
+            return combined.sort((a, b) => 
+              new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+            );
+          });
+          setLoading(false);
+        }
+      };
+
+      fetchCloudScreenshots();
+
+      return () => {
+        supabase.removeChannel(channel);
+      };
     } else {
       // Load from IndexedDB
       loadLocalData();
@@ -134,24 +188,42 @@ export default function App() {
         entities: { dates: [], amounts: [], emails: [], urls: [], phones: [], order_ids: [] },
         source: 'upload',
         isAnalyzed: false,
-        userId: user?.uid
+        userId: user?.id
       };
 
       try {
-        if (user) {
+        if (user && isSupabaseConfigured) {
           // Upload to Storage
-          const storageRef = ref(storage, `screenshots/${user.uid}/${Date.now()}_${file.name}`);
-          await uploadBytes(storageRef, blob);
-          const imageUrl = await getDownloadURL(storageRef);
+          const fileName = `${user.id}/${Date.now()}_${file.name}`;
+          const { data: uploadData, error: uploadError } = await supabase.storage
+            .from('screenshots')
+            .upload(fileName, blob);
+
+          if (uploadError) throw uploadError;
+
+          const { data: { publicUrl } } = supabase.storage
+            .from('screenshots')
+            .getPublicUrl(fileName);
+
+          const imageUrl = publicUrl;
           
-          // Save to Firestore
+          // Save to Supabase DB
           const { imageBlob, ...metadata } = newScreenshot;
-          const docRef = await addDoc(collection(db, 'screenshots'), {
-            ...metadata,
-            imageUrl,
-            storagePath: storageRef.fullPath
-          });
-          newScreenshot.id = docRef.id;
+          const { data: dbData, error: dbError } = await supabase
+            .from('screenshots')
+            .insert([{
+              ...metadata,
+              imageUrl,
+              userId: user.id,
+              storagePath: fileName
+            }])
+            .select()
+            .single();
+
+          if (dbError) throw dbError;
+          if (dbData) {
+            newScreenshot.id = dbData.id;
+          }
         } else {
           const id = await saveScreenshot(newScreenshot);
           newScreenshot.id = id;
@@ -190,9 +262,12 @@ export default function App() {
         lastAnalyzedAt: Date.now()
       };
 
-      if (user && updated.id) {
+      if (user && isSupabaseConfigured && updated.id && typeof updated.id === 'string') {
         const { imageBlob, ...metadata } = updated;
-        await updateDoc(doc(db, 'screenshots', updated.id as string), metadata);
+        await supabase
+          .from('screenshots')
+          .update(metadata)
+          .eq('id', updated.id);
       } else {
         await updateScreenshot(updated);
         setScreenshots(prev => prev.map(s => s.id === updated.id ? updated : s));
@@ -206,17 +281,18 @@ export default function App() {
 
   const handleDelete = async (id: string | number) => {
     if (confirm("Are you sure you want to delete this screenshot?")) {
-      if (user && typeof id === 'string') {
-        // Delete from Firestore and Storage
-        const docRef = doc(db, 'screenshots', id);
-        const docSnap = await getDocs(query(collection(db, 'screenshots'), where('__name__', '==', id)));
-        if (!docSnap.empty) {
-          const data = docSnap.docs[0].data();
-          if (data.storagePath) {
-            await deleteObject(ref(storage, data.storagePath));
-          }
+      if (user && isSupabaseConfigured && typeof id === 'string') {
+        // Delete from Supabase Storage and DB
+        const { data } = await supabase
+          .from('screenshots')
+          .select('storagePath')
+          .eq('id', id)
+          .single();
+
+        if (data?.storagePath) {
+          await supabase.storage.from('screenshots').remove([data.storagePath]);
         }
-        await deleteDoc(docRef);
+        await supabase.from('screenshots').delete().eq('id', id);
       } else {
         await deleteScreenshot(id as number);
         setScreenshots(prev => prev.filter(s => s.id !== id));
@@ -279,140 +355,170 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#F7F8FA] dark:bg-[#0F1115] transition-colors duration-500 font-sans selection:bg-indigo-500/30">
+    <div className="min-h-screen bg-ink text-bone font-sans selection:bg-accent selection:text-ink transition-colors duration-700">
+      <div className="grain-overlay" />
+      
       {/* Header */}
-      <header className="sticky top-0 z-40 bg-white/80 dark:bg-[#0F1115]/80 backdrop-blur-xl border-b border-slate-200 dark:border-slate-800">
-        <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between gap-8">
-          <div className="flex items-center gap-3 shrink-0">
-            <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-500/20">
-              <Sparkles className="w-5 h-5 text-white" />
+      <header className="sticky top-0 z-40 bg-ink/80 backdrop-blur-2xl border-b border-white/5">
+        <div className="max-w-[1600px] mx-auto px-8 h-24 flex items-center justify-between gap-12">
+          <div className="flex items-center gap-6 shrink-0">
+            <div className="relative group">
+              <div className="w-12 h-12 bg-accent flex items-center justify-center rotate-3 group-hover:rotate-0 transition-transform duration-500">
+                <Sparkles className="w-6 h-6 text-ink" />
+              </div>
+              <div className="absolute -inset-1 border border-accent/30 -z-10 group-hover:inset-0 transition-all" />
             </div>
-            <h1 className="text-xl font-bold tracking-tight text-slate-900 dark:text-white hidden sm:block">
-              AI Screenshot Organizer
-            </h1>
+            <div className="flex flex-col">
+              <h1 className="text-2xl font-serif italic leading-none tracking-tight">
+                Archive <span className="text-accent">.</span> AI
+              </h1>
+              <span className="mono-label mt-1">Screenshot Intelligence</span>
+            </div>
           </div>
 
-          <form onSubmit={handleSearch} className="flex-1 max-w-2xl relative group">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-indigo-500 transition-colors" />
+          <form onSubmit={handleSearch} className="flex-1 max-w-3xl relative group">
+            <Search className="absolute left-0 top-1/2 -translate-y-1/2 w-4 h-4 text-muted group-focus-within:text-accent transition-colors" />
             <input 
               type="text" 
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search by meaning, content, or context..."
-              className="w-full bg-slate-100 dark:bg-slate-800 border-none rounded-2xl py-3 pl-12 pr-4 text-sm focus:ring-2 focus:ring-indigo-500/20 transition-all dark:text-white"
+              className="w-full bg-transparent border-b border-white/10 rounded-none py-4 pl-8 pr-4 text-sm focus:border-accent focus:ring-0 transition-all placeholder:text-muted/50"
             />
-            {isSearching && <Loader2 className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-indigo-500 animate-spin" />}
+            {isSearching && <Loader2 className="absolute right-0 top-1/2 -translate-y-1/2 w-4 h-4 text-accent animate-spin" />}
           </form>
 
-          <div className="flex items-center gap-4 shrink-0">
-            <AuthButton />
+          <div className="flex items-center gap-8 shrink-0">
             <button 
-              onClick={() => setDarkMode(!darkMode)}
-              className="p-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+              onClick={() => setCurrentPage(currentPage === 'home' ? 'sources' : 'home')}
+              className={cn(
+                "mono-label flex items-center gap-2 transition-all hover:text-accent",
+                currentPage === 'sources' && "text-accent"
+              )}
             >
-              {darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+              <Cloud className="w-4 h-4" />
+              <span className="hidden lg:block">Sources</span>
             </button>
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-100 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700">
-              <div className={cn("w-2 h-2 rounded-full", isMockMode ? "bg-amber-500" : "bg-emerald-500")} />
-              <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest">
-                {isMockMode ? 'Mock AI' : 'Gemini Live'}
+            <AuthButton />
+            <div className="flex items-center gap-3 px-4 py-2 border border-white/5 bg-white/[0.02]">
+              <div className={cn("w-1.5 h-1.5 rounded-full", isMockMode ? "bg-amber-500" : "bg-accent")} />
+              <span className="mono-label">
+                {isMockMode ? 'Mock' : 'Live'}
               </span>
             </div>
           </div>
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-6 py-10">
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-10">
-          {/* Sidebar / Filters */}
-          <aside className="lg:col-span-1 space-y-8">
-            <section>
-              <h3 className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest mb-4">Quick Upload</h3>
-              <UploadDropzone onUpload={handleUpload} isUploading={isUploading} />
-            </section>
+      <main className="max-w-[1600px] mx-auto px-8 py-16">
+        {currentPage === 'sources' ? (
+          <SourcesPage onBack={() => setCurrentPage('home')} />
+        ) : (
+          <div className="flex flex-col lg:flex-row gap-20">
+            {/* Sidebar / Filters */}
+            <aside className="w-full lg:w-80 shrink-0 space-y-16">
+              <section>
+                <h3 className="mono-label mb-8">Ingest</h3>
+                <UploadDropzone onUpload={handleUpload} isUploading={isUploading} />
+              </section>
 
-            <section>
-              <h3 className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest mb-4">Filters</h3>
-              <Filters 
-                activeCategory={activeCategory} 
-                onCategoryChange={setActiveCategory}
-                hasAmount={hasAmount}
-                setHasAmount={setHasAmount}
-                hasUrl={hasUrl}
-                setHasUrl={setHasUrl}
-              />
-            </section>
+              <section>
+                <h3 className="mono-label mb-8">Refine</h3>
+                <Filters 
+                  activeCategory={activeCategory} 
+                  onCategoryChange={setActiveCategory}
+                  hasAmount={hasAmount}
+                  setHasAmount={setHasAmount}
+                  hasUrl={hasUrl}
+                  setHasUrl={setHasUrl}
+                />
+              </section>
 
-            <section className="p-6 bg-indigo-600 rounded-3xl text-white shadow-xl shadow-indigo-500/20">
-              <h4 className="font-bold mb-2 flex items-center gap-2">
-                {user ? <Sparkles className="w-4 h-4" /> : <Database className="w-4 h-4" />}
-                {user ? 'Cloud Drive Active' : 'Local Storage'}
-              </h4>
-              <p className="text-xs text-indigo-100 leading-relaxed">
-                {user 
-                  ? 'Your screenshots are securely synced to your Cloud Drive (Firestore) and accessible anywhere.' 
-                  : "All your screenshots are stored locally. Sign in to sync with your Cloud Drive."}
-              </p>
-            </section>
-          </aside>
+              <section className="p-8 border border-accent/20 bg-accent/[0.02] relative overflow-hidden group">
+                <div className="absolute top-0 right-0 w-24 h-24 bg-accent/5 -mr-12 -mt-12 rotate-45 group-hover:scale-150 transition-transform duration-700" />
+                <h4 className="font-serif italic text-xl mb-4 flex items-center gap-2">
+                  {user ? <Sparkles className="w-5 h-5 text-accent" /> : <Database className="w-5 h-5 text-accent" />}
+                  {user ? 'Cloud Active' : 'Local Vault'}
+                </h4>
+                <p className="text-xs text-muted leading-relaxed font-light">
+                  {user 
+                    ? 'Your intelligence archive is securely synced across all nodes via Firestore.' 
+                    : "Operating in local-only mode. Sign in to enable cross-device synchronization."}
+                </p>
+              </section>
+            </aside>
 
-          {/* Grid */}
-          <div className="lg:col-span-3">
-            {loading ? (
-              <div className="h-96 flex items-center justify-center">
-                <Loader2 className="w-8 h-8 text-indigo-500 animate-spin" />
-              </div>
-            ) : filteredScreenshots.length === 0 ? (
-              <div className="h-[60vh] flex flex-col items-center justify-center text-center space-y-6">
-                <div className="relative">
-                  <div className="w-32 h-32 bg-indigo-100 dark:bg-indigo-900/20 rounded-[40px] flex items-center justify-center">
-                    <LayoutGrid className="w-12 h-12 text-indigo-500" />
+            {/* Grid */}
+            <div className="flex-1">
+              {loading ? (
+                <div className="h-96 flex flex-col items-center justify-center gap-4">
+                  <Loader2 className="w-12 h-12 text-accent animate-spin" />
+                  <span className="mono-label animate-pulse">Initializing Archive</span>
+                </div>
+              ) : filteredScreenshots.length === 0 ? (
+                <div className="h-[60vh] flex flex-col items-center justify-center text-center space-y-12">
+                  <div className="relative">
+                    <div className="w-40 h-40 border border-white/5 flex items-center justify-center rotate-45">
+                      <LayoutGrid className="w-16 h-16 text-white/10 -rotate-45" />
+                    </div>
+                    <Sparkles className="absolute -top-4 -right-4 w-10 h-10 text-accent animate-pulse" />
                   </div>
-                  <div className="absolute -top-4 -right-4 w-12 h-12 bg-white dark:bg-slate-800 rounded-2xl shadow-xl flex items-center justify-center animate-bounce">
-                    <Sparkles className="w-6 h-6 text-amber-500" />
+                  <div className="space-y-4">
+                    <h2 className="text-5xl font-serif italic">Archive Empty</h2>
+                    <p className="text-muted font-light max-w-sm mx-auto">
+                      Your intelligence repository is currently void. Ingest screenshots to begin analysis.
+                    </p>
+                  </div>
+                  <button 
+                    onClick={() => (document.querySelector('input[type="file"]') as HTMLInputElement)?.click()}
+                    className="accent-button"
+                  >
+                    Ingest First Entry
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-12">
+                  <div className="flex items-end justify-between border-b border-white/5 pb-8">
+                    <h2 className="text-6xl font-serif italic leading-none">
+                      Collection <span className="text-accent text-2xl align-top">({filteredScreenshots.length})</span>
+                    </h2>
+                    <div className="mono-label">Sorted by Recency</div>
+                  </div>
+                  
+                  <div className="editorial-grid">
+                    <AnimatePresence mode="popLayout">
+                      {filteredScreenshots.map((s, idx) => (
+                        <motion.div
+                          key={s.id}
+                          initial={{ opacity: 0, y: 20 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ delay: idx * 0.05 }}
+                        >
+                          <ScreenshotCard 
+                            screenshot={s} 
+                            onClick={() => setSelectedScreenshot(s)}
+                            onDelete={(e) => { e.stopPropagation(); handleDelete(s.id!); }}
+                            onReanalyze={(e) => handleReanalyze(e, s)}
+                          />
+                        </motion.div>
+                      ))}
+                    </AnimatePresence>
                   </div>
                 </div>
-                <div>
-                  <h2 className="text-2xl font-bold text-slate-900 dark:text-white">No screenshots found</h2>
-                  <p className="text-slate-500 dark:text-slate-400 mt-2 max-w-xs mx-auto">
-                    Upload some screenshots to see the AI magic in action.
-                  </p>
-                </div>
-                <button 
-                  onClick={() => (document.querySelector('input[type="file"]') as HTMLInputElement)?.click()}
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3 rounded-2xl font-bold transition-all shadow-lg shadow-indigo-500/20 flex items-center gap-2"
-                >
-                  <Plus className="w-5 h-5" />
-                  Upload First Screenshot
-                </button>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-6">
-                <AnimatePresence mode="popLayout">
-                  {filteredScreenshots.map(s => (
-                    <ScreenshotCard 
-                      key={s.id} 
-                      screenshot={s} 
-                      onClick={() => setSelectedScreenshot(s)}
-                      onDelete={(e) => { e.stopPropagation(); handleDelete(s.id!); }}
-                      onReanalyze={(e) => handleReanalyze(e, s)}
-                    />
-                  ))}
-                </AnimatePresence>
-              </div>
-            )}
+              )}
+            </div>
           </div>
-        </div>
+        )}
       </main>
 
       {/* Floating AI Button */}
       <button 
         onClick={() => setIsChatOpen(true)}
-        className="fixed bottom-8 right-8 w-16 h-16 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl shadow-2xl shadow-indigo-500/40 flex items-center justify-center transition-all hover:scale-110 active:scale-95 group z-30"
+        className="fixed bottom-12 right-12 w-20 h-20 bg-accent text-ink flex items-center justify-center transition-all hover:scale-110 active:scale-95 group z-30 shadow-[0_0_30px_rgba(255,77,0,0.3)]"
       >
-        <Sparkles className="w-7 h-7 group-hover:rotate-12 transition-transform" />
-        <div className="absolute -top-2 -right-2 px-2 py-1 bg-amber-500 text-white text-[8px] font-black rounded-lg shadow-lg uppercase tracking-tighter">
-          AI Chat
+        <Sparkles className="w-8 h-8 group-hover:rotate-12 transition-transform duration-500" />
+        <div className="absolute -top-3 -right-3 px-3 py-1 bg-bone text-ink text-[10px] font-mono font-bold shadow-xl uppercase tracking-tighter">
+          Query
         </div>
       </button>
 
@@ -425,9 +531,12 @@ export default function App() {
           const s = screenshots.find(sc => sc.id === id);
           if (s) {
             const updated = { ...s, tags };
-            if (user && typeof id === 'string') {
+            if (user && isSupabaseConfigured && typeof id === 'string') {
               const { imageBlob, ...metadata } = updated;
-              await updateDoc(doc(db, 'screenshots', id), metadata);
+              await supabase
+                .from('screenshots')
+                .update(metadata)
+                .eq('id', id);
             } else {
               await updateScreenshot(updated);
               setScreenshots(prev => prev.map(sc => sc.id === id ? updated : sc));

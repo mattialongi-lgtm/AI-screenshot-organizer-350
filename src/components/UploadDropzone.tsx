@@ -28,30 +28,38 @@ export const UploadDropzone: React.FC<UploadDropzoneProps> = ({ onUpload, isUplo
     <div 
       {...getRootProps()} 
       className={`
-        relative w-full h-48 border-2 border-dashed rounded-3xl flex flex-col items-center justify-center transition-all cursor-pointer
-        ${isDragActive ? 'border-indigo-500 bg-indigo-500/5' : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/50'}
-        ${isUploading ? 'opacity-50 cursor-not-allowed' : 'hover:border-indigo-500 hover:bg-indigo-500/5'}
+        relative w-full h-56 border border-dashed flex flex-col items-center justify-center transition-all duration-500 cursor-pointer group
+        ${isDragActive ? 'border-accent bg-accent/5' : 'border-white/10 bg-white/[0.02]'}
+        ${isUploading ? 'opacity-50 cursor-not-allowed' : 'hover:border-white/30 hover:bg-white/[0.04]'}
       `}
     >
       <input {...getInputProps()} />
-      <div className="relative mb-4">
-        <div className="w-16 h-16 bg-indigo-100 dark:bg-indigo-900/30 rounded-2xl flex items-center justify-center">
-          <Upload className={`w-8 h-8 ${isDragActive ? 'text-indigo-600' : 'text-slate-400'}`} />
+      
+      <div className="relative mb-6">
+        <div className="w-16 h-16 border border-white/10 flex items-center justify-center rotate-45 group-hover:rotate-0 transition-transform duration-700">
+          <Upload className={`w-6 h-6 -rotate-45 group-hover:rotate-0 transition-transform duration-700 ${isDragActive ? 'text-accent' : 'text-muted'}`} />
         </div>
         {isUploading && (
-          <div className="absolute -top-2 -right-2">
-            <Sparkles className="w-6 h-6 text-indigo-500 animate-pulse" />
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="scan-line !h-0.5" />
           </div>
         )}
       </div>
-      <div className="text-center px-6">
-        <p className="text-sm font-bold text-slate-900 dark:text-white">
-          {isUploading ? 'AI is analyzing...' : isDragActive ? 'Drop your screenshots here' : 'Click or drag screenshots to upload'}
+
+      <div className="text-center px-8 space-y-2">
+        <p className="mono-label text-[10px] text-bone">
+          {isUploading ? 'Analyzing Specimen' : isDragActive ? 'Release to Ingest' : 'Click or Drag to Ingest'}
         </p>
-        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-          Supported formats: PNG, JPG, WEBP
+        <p className="mono-label text-[8px] opacity-50">
+          Formats: PNG, JPG, WEBP
         </p>
       </div>
+
+      {/* Corner Accents */}
+      <div className="absolute top-0 left-0 w-2 h-2 border-t border-l border-white/20" />
+      <div className="absolute top-0 right-0 w-2 h-2 border-t border-r border-white/20" />
+      <div className="absolute bottom-0 left-0 w-2 h-2 border-b border-l border-white/20" />
+      <div className="absolute bottom-0 right-0 w-2 h-2 border-b border-r border-white/20" />
     </div>
   );
 };

@@ -4,37 +4,54 @@
  */
 
 import React from 'react';
-import { User, LogOut, LogIn } from 'lucide-react';
-import { auth, signInWithGoogle, logout } from '../lib/firebase';
-import { useAuthState } from 'react-firebase-hooks/auth';
+import { User as UserIcon, LogOut, LogIn } from 'lucide-react';
+import { signInWithGoogle, logout, isSupabaseConfigured, useSupabaseAuth } from '../lib/supabase';
 
 export const AuthButton: React.FC = () => {
-  const [user, loading] = useAuthState(auth);
+  const { user, loading } = useSupabaseAuth();
+
+  if (!isSupabaseConfigured) {
+    return (
+      <div className="flex items-center gap-2 px-3 py-1.5 bg-white/[0.02] border border-white/10 opacity-50 cursor-not-allowed" title="Supabase not configured">
+        <UserIcon className="w-4 h-4 text-muted" />
+        <span className="mono-label text-[10px]">Local Mode</span>
+      </div>
+    );
+  }
 
   if (loading) {
     return (
-      <div className="w-10 h-10 bg-slate-100 dark:bg-slate-800 rounded-xl flex items-center justify-center">
-        <div className="w-4 h-4 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+      <div className="w-10 h-10 border border-white/10 flex items-center justify-center">
+        <div className="w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
 
   if (user) {
+    const displayName = user.user_metadata?.full_name || user.email;
+    const photoURL = user.user_metadata?.avatar_url;
+
     return (
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-4">
         <div className="hidden md:block text-right">
-          <p className="text-xs font-bold text-slate-900 dark:text-white">{user.displayName}</p>
-          <p className="text-[10px] text-slate-400 uppercase tracking-widest font-bold">Cloud Sync Active</p>
+          <p className="text-xs font-serif italic text-bone">{displayName}</p>
+          <p className="mono-label text-[8px] opacity-50">Archive Linked</p>
         </div>
         <div className="relative group">
-          <img 
-            src={user.photoURL || ''} 
-            alt={user.displayName || ''} 
-            className="w-10 h-10 rounded-xl border-2 border-indigo-500/20"
-          />
+          {photoURL ? (
+            <img 
+              src={photoURL} 
+              alt={displayName || ''} 
+              className="w-10 h-10 border border-white/10 grayscale hover:grayscale-0 transition-all"
+            />
+          ) : (
+            <div className="w-10 h-10 border border-white/10 flex items-center justify-center">
+              <UserIcon className="w-5 h-5 text-muted" />
+            </div>
+          )}
           <button 
             onClick={logout}
-            className="absolute -bottom-1 -right-1 p-1 bg-red-500 text-white rounded-lg opacity-0 group-hover:opacity-100 transition-opacity shadow-lg"
+            className="absolute -bottom-1 -right-1 p-1 bg-accent text-ink opacity-0 group-hover:opacity-100 transition-opacity shadow-lg"
             title="Logout"
           >
             <LogOut className="w-3 h-3" />
@@ -47,10 +64,10 @@ export const AuthButton: React.FC = () => {
   return (
     <button 
       onClick={signInWithGoogle}
-      className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-bold transition-all shadow-lg shadow-indigo-500/20"
+      className="accent-button flex items-center gap-3"
     >
       <LogIn className="w-4 h-4" />
-      Sign In
+      Initialize Link
     </button>
   );
 };

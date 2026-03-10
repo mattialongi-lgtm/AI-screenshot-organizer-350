@@ -2,7 +2,8 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import multer from "multer";
-import Database from "better-sqlite3";
+import pg from "pg";
+const { Pool } = pg;
 import fs from "fs";
 import { GoogleGenAI, Type } from "@google/genai";
 import { fileURLToPath } from "url";
@@ -17,49 +18,82 @@ if (!fs.existsSync(UPLOADS_DIR)) {
 }
 
 // Database Setup
-const db = new Database("screenshots.db");
-db.exec(`
-  CREATE TABLE IF NOT EXISTS screenshots (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    filename TEXT NOT NULL,
-    original_name TEXT NOT NULL,
-    upload_date DATETIME DEFAULT CURRENT_TIMESTAMP,
-    category TEXT,
-    summary TEXT,
-    ocr_text TEXT,
-    tags TEXT,
-    entities TEXT,
-    language TEXT,
-    embedding TEXT,
-    is_sensitive INTEGER DEFAULT 0,
-    source_id TEXT,
-    external_id TEXT UNIQUE
-  );
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false
+  }
+});
 
-  CREATE TABLE IF NOT EXISTS cloud_sources (
-    id TEXT PRIMARY KEY,
-    type TEXT NOT NULL,
-    email TEXT,
-    access_token TEXT,
-    refresh_token TEXT,
-    last_sync DATETIME
-  );
-`);
+async function initDb() {
+  const client = await pool.connect();
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS screenshots (
+        id SERIAL PRIMARY KEY,
+        filename TEXT NOT NULL,
+        original_name TEXT NOT NULL,
+        upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        category TEXT,
+        summary TEXT,
+        ocr_text TEXT,
+        tags TEXT,
+        entities TEXT,
+        language TEXT,
+        embedding TEXT,
+        is_sensitive INTEGER DEFAULT 0,
+        source_id TEXT,
+        external_id TEXT UNIQUE,
+        userId TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS cloud_sources (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        email TEXT,
+        local_path TEXT,
+        access_token TEXT,
+        refresh_token TEXT,
+        status TEXT DEFAULT 'connected',
+        connected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_sync TIMESTAMP,
+        settings TEXT -- JSON string
+      );
+    `);
+  } finally {
+    client.release();
+  }
+}
+
+initDb().catch(console.error);
+
+import { google } from "googleapis";
+import { WebSocketServer, WebSocket } from "ws";
+import http from "http";
 
 const app = express();
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server });
 const PORT = 3000;
 
-app.use(express.json());
+// WebSocket connection handling
+const clients = new Set<WebSocket>();
+wss.on("connection", (ws) => {
+  clients.add(ws);
+  ws.on("close", () => clients.delete(ws));
+});
+
+function broadcast(data: any) {
+  const message = JSON.stringify(data);
+  clients.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(message);
+    }
+  });
+}
+
+app.use(express.json({ limit: '50mb' }));
 app.use("/uploads", express.static(UPLOADS_DIR));
-
-// Google OAuth Setup
-import { google } from "googleapis";
-
-const oauth2Client = new google.auth.OAuth2(
-  process.env.GOOGLE_CLIENT_ID,
-  process.env.GOOGLE_CLIENT_SECRET,
-  `${process.env.APP_URL}/api/auth/google/callback`
-);
 
 // Multer Setup
 const storage = multer.diskStorage({
@@ -70,6 +104,64 @@ const storage = multer.diskStorage({
   },
 });
 const upload = multer({ storage });
+
+// iCloud Import Endpoint (called by local agent)
+app.post("/api/icloud/import", upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+    const { localPath, modifiedTime } = req.body;
+
+    // Check if already exists
+    const existingRes = await pool.query("SELECT id FROM screenshots WHERE external_id = $1", [localPath]);
+    if (existingRes.rows.length > 0) {
+      fs.unlinkSync(req.file.path);
+      return res.json({ success: true, skipped: true });
+    }
+
+    const analysis = await analyzeScreenshot(req.file.path);
+    const embedding = await generateEmbedding(analysis.summary + " " + analysis.ocr_text);
+
+    const result = await pool.query(`
+      INSERT INTO screenshots (filename, original_name, category, summary, ocr_text, tags, entities, language, embedding, is_sensitive, source_id, external_id)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      RETURNING id
+    `, [
+      req.file.filename,
+      req.file.originalname,
+      analysis.category,
+      analysis.summary,
+      analysis.ocr_text,
+      JSON.stringify(analysis.tags),
+      JSON.stringify(analysis.entities),
+      analysis.language,
+      JSON.stringify(embedding),
+      analysis.is_sensitive ? 1 : 0,
+      'icloud_folder',
+      localPath
+    ]);
+
+    const newScreenshot = {
+      id: result.rows[0].id,
+      ...analysis,
+      filename: req.file.filename,
+      original_name: req.file.originalname,
+      upload_date: new Date().toISOString(),
+      source: 'icloudFolder'
+    };
+
+    broadcast({ type: 'icloud:newFile', data: newScreenshot });
+    res.json({ success: true, id: result.lastInsertRowid });
+  } catch (error) {
+    console.error("iCloud import error:", error);
+    res.status(500).json({ error: "Failed to process iCloud screenshot" });
+  }
+});
+
+const oauth2Client = new google.auth.OAuth2(
+  process.env.GOOGLE_CLIENT_ID,
+  process.env.GOOGLE_CLIENT_SECRET,
+  `${process.env.APP_URL}/api/auth/google/callback`
+);
 
 // AI Service Logic
 async function analyzeScreenshot(filePath: string) {
@@ -136,10 +228,14 @@ app.get("/api/auth/google/callback", async (req, res) => {
     const oauth2 = google.oauth2({ version: "v2", auth: oauth2Client });
     const userInfo = await oauth2.userinfo.get();
 
-    db.prepare(`
-      INSERT OR REPLACE INTO cloud_sources (id, type, email, access_token, refresh_token)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(userInfo.data.id, "google_drive", userInfo.data.email, tokens.access_token, tokens.refresh_token);
+    await pool.query(`
+      INSERT INTO cloud_sources (id, type, email, access_token, refresh_token)
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT (id) DO UPDATE SET
+        access_token = EXCLUDED.access_token,
+        refresh_token = EXCLUDED.refresh_token,
+        email = EXCLUDED.email
+    `, [userInfo.data.id, "google_drive", userInfo.data.email, tokens.access_token, tokens.refresh_token]);
 
     res.send(`
       <html>
@@ -158,77 +254,163 @@ app.get("/api/auth/google/callback", async (req, res) => {
   }
 });
 
-app.get("/api/sources", (req, res) => {
-  const sources = db.prepare("SELECT id, type, email, last_sync FROM cloud_sources").all();
-  res.json(sources);
+app.get("/api/sources", async (req, res) => {
+  const result = await pool.query("SELECT id, type as provider, email, local_path, last_sync, status, connected_at, settings FROM cloud_sources");
+  const sources = result.rows;
+  res.json(sources.map((s: any) => ({
+    ...s,
+    provider: s.provider === 'google_drive' ? 'googleDrive' : s.provider,
+    settings: s.settings ? JSON.parse(s.settings) : {
+      keywords: ["screenshot", "screen shot", "screenshots", "IMG_"],
+      dateRangeDays: 30,
+      maxFiles: 200,
+      autoSyncEnabled: false,
+      intervalMinutes: 15
+    }
+  })));
 });
 
-// Sync Logic
-app.post("/api/sync", async (req, res) => {
-  const sources = db.prepare("SELECT * FROM cloud_sources").all();
-  let totalSynced = 0;
+app.post("/api/sources/:id/settings", async (req, res) => {
+  const { id } = req.params;
+  const { settings } = req.body;
+  await pool.query("UPDATE cloud_sources SET settings = $1 WHERE id = $2", [JSON.stringify(settings), id]);
+  res.json({ success: true });
+});
 
-  for (const source of sources as any) {
-    if (source.type === "google_drive") {
+app.post("/api/sources/:id/disconnect", async (req, res) => {
+  const { id } = req.params;
+  const result = await pool.query("SELECT * FROM cloud_sources WHERE id = $1", [id]);
+  const source = result.rows[0];
+  if (source && source.type === 'google_drive') {
+    try {
       const auth = new google.auth.OAuth2(
         process.env.GOOGLE_CLIENT_ID,
         process.env.GOOGLE_CLIENT_SECRET
       );
-      auth.setCredentials({
-        access_token: source.access_token,
-        refresh_token: source.refresh_token,
-      });
+      auth.setCredentials({ access_token: source.access_token });
+      await auth.revokeToken(source.access_token);
+    } catch (e) {
+      console.error("Token revocation failed:", e);
+    }
+  }
+  await pool.query("DELETE FROM cloud_sources WHERE id = $1", [id]);
+  res.json({ success: true });
+});
 
-      const drive = google.drive({ version: "v3", auth });
-      const response = await drive.files.list({
-        q: "mimeType contains 'image/' and name contains 'Screenshot'",
-        fields: "files(id, name, mimeType)",
-        pageSize: 10, // Limit for demo
-      });
+// Sync Logic
+app.post("/api/sync", async (req, res) => {
+  const sourcesRes = await pool.query("SELECT * FROM cloud_sources");
+  const sources = sourcesRes.rows;
+  let totalSynced = 0;
+  let results: any[] = [];
 
-      const files = response.data.files || [];
-      for (const file of files) {
-        // Check if already synced
-        const existing = db.prepare("SELECT id FROM screenshots WHERE external_id = ?").get(file.id);
-        if (existing) continue;
+  for (const source of sources as any) {
+    const settings = source.settings ? JSON.parse(source.settings) : {
+      keywords: ["screenshot", "screen shot", "screenshots", "IMG_"],
+      dateRangeDays: 30,
+      maxFiles: 200
+    };
 
-        try {
-          const fileRes = await drive.files.get({ fileId: file.id!, alt: "media" }, { responseType: "arraybuffer" });
-          const buffer = Buffer.from(fileRes.data as ArrayBuffer);
-          const filename = `${Date.now()}-${file.name}`;
-          const filePath = path.join(UPLOADS_DIR, filename);
-          fs.writeFileSync(filePath, buffer);
+    if (source.type === "google_drive") {
+      try {
+        const auth = new google.auth.OAuth2(
+          process.env.GOOGLE_CLIENT_ID,
+          process.env.GOOGLE_CLIENT_SECRET
+        );
+        auth.setCredentials({
+          access_token: source.access_token,
+          refresh_token: source.refresh_token,
+        });
 
-          const analysis = await analyzeScreenshot(filePath);
-          const embedding = await generateEmbedding(analysis.summary + " " + analysis.ocr_text);
+        const drive = google.drive({ version: "v3", auth });
+        
+        // Build query
+        const dateLimit = new Date();
+        dateLimit.setDate(dateLimit.getDate() - settings.dateRangeDays);
+        const rfc3339Date = dateLimit.toISOString();
 
-          db.prepare(`
-            INSERT INTO screenshots (filename, original_name, category, summary, ocr_text, tags, entities, language, embedding, is_sensitive, source_id, external_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `).run(
-            filename,
-            file.name,
-            analysis.category,
-            analysis.summary,
-            analysis.ocr_text,
-            JSON.stringify(analysis.tags),
-            JSON.stringify(analysis.entities),
-            analysis.language,
-            JSON.stringify(embedding),
-            analysis.is_sensitive ? 1 : 0,
-            source.id,
-            file.id
-          );
-          totalSynced++;
-        } catch (err) {
-          console.error(`Failed to sync file ${file.id}:`, err);
+        let q = `mimeType contains 'image/' and modifiedTime > '${rfc3339Date}'`;
+        if (settings.keywords && settings.keywords.length > 0) {
+          const keywordQuery = settings.keywords.map((k: string) => `name contains '${k}'`).join(" or ");
+          q += ` and (${keywordQuery})`;
         }
+
+        const response = await drive.files.list({
+          q,
+          fields: "files(id, name, mimeType, modifiedTime, webViewLink)",
+          pageSize: settings.maxFiles || 50,
+          orderBy: "modifiedTime desc"
+        });
+
+        const files = response.data.files || [];
+        let sourceSynced = 0;
+        let sourceSkipped = 0;
+        let sourceErrors = 0;
+
+        for (const file of files) {
+          // Check if already synced
+          const existingRes = await pool.query("SELECT id FROM screenshots WHERE external_id = $1", [file.id]);
+          if (existingRes.rows.length > 0) {
+            sourceSkipped++;
+            continue;
+          }
+
+          try {
+            const fileRes = await drive.files.get({ fileId: file.id!, alt: "media" }, { responseType: "arraybuffer" });
+            const buffer = Buffer.from(fileRes.data as ArrayBuffer);
+            const filename = `${Date.now()}-${file.name}`;
+            const filePath = path.join(UPLOADS_DIR, filename);
+            fs.writeFileSync(filePath, buffer);
+
+            const analysis = await analyzeScreenshot(filePath);
+            const embedding = await generateEmbedding(analysis.summary + " " + analysis.ocr_text);
+
+            await pool.query(`
+              INSERT INTO screenshots (filename, original_name, category, summary, ocr_text, tags, entities, language, embedding, is_sensitive, source_id, external_id)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            `, [
+              filename,
+              file.name,
+              analysis.category,
+              analysis.summary,
+              analysis.ocr_text,
+              JSON.stringify(analysis.tags),
+              JSON.stringify(analysis.entities),
+              analysis.language,
+              JSON.stringify(embedding),
+              analysis.is_sensitive ? 1 : 0,
+              source.id,
+              file.id
+            ]);
+            sourceSynced++;
+            totalSynced++;
+            
+            // Broadcast new file
+            broadcast({ 
+              type: 'google:newFile', 
+              data: {
+                id: file.id,
+                filename,
+                original_name: file.name,
+                upload_date: new Date().toISOString(),
+                source: 'googleDrive'
+              } 
+            });
+          } catch (err) {
+            console.error(`Failed to sync file ${file.id}:`, err);
+            sourceErrors++;
+          }
+        }
+        await pool.query("UPDATE cloud_sources SET last_sync = CURRENT_TIMESTAMP WHERE id = $1", [source.id]);
+        results.push({ provider: 'googleDrive', synced: sourceSynced, skipped: sourceSkipped, errors: sourceErrors });
+      } catch (err) {
+        console.error("Google Drive sync failed:", err);
+        results.push({ provider: 'googleDrive', error: "Sync failed" });
       }
-      db.prepare("UPDATE cloud_sources SET last_sync = CURRENT_TIMESTAMP WHERE id = ?").run(source.id);
     }
   }
 
-  res.json({ success: true, syncedCount: totalSynced });
+  res.json({ success: true, syncedCount: totalSynced, results });
 });
 
 // API Routes
@@ -239,12 +421,11 @@ app.post("/api/upload", upload.single("screenshot"), async (req, res) => {
     const analysis = await analyzeScreenshot(req.file.path);
     const embedding = await generateEmbedding(analysis.summary + " " + analysis.ocr_text);
 
-    const stmt = db.prepare(`
+    const result = await pool.query(`
       INSERT INTO screenshots (filename, original_name, category, summary, ocr_text, tags, entities, language, embedding, is_sensitive)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    const result = stmt.run(
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      RETURNING id
+    `, [
       req.file.filename,
       req.file.originalname,
       analysis.category,
@@ -255,18 +436,18 @@ app.post("/api/upload", upload.single("screenshot"), async (req, res) => {
       analysis.language,
       JSON.stringify(embedding),
       analysis.is_sensitive ? 1 : 0
-    );
+    ]);
 
-    res.json({ id: result.lastInsertRowid, ...analysis });
+    res.json({ id: result.rows[0].id, ...analysis });
   } catch (error) {
     console.error("Upload error:", error);
     res.status(500).json({ error: "Failed to process screenshot" });
   }
 });
 
-app.get("/api/screenshots", (req, res) => {
-  const screenshots = db.prepare("SELECT * FROM screenshots ORDER BY upload_date DESC").all();
-  res.json(screenshots);
+app.get("/api/screenshots", async (req, res) => {
+  const result = await pool.query("SELECT * FROM screenshots ORDER BY upload_date DESC");
+  res.json(result.rows);
 });
 
 app.post("/api/search", async (req, res) => {
@@ -275,7 +456,8 @@ app.post("/api/search", async (req, res) => {
     const queryEmbedding = await generateEmbedding(query);
 
     // Simple cosine similarity in JS (for production use a vector DB like Pinecone or pgvector)
-    const screenshots = db.prepare("SELECT * FROM screenshots").all();
+    const result = await pool.query("SELECT * FROM screenshots");
+    const screenshots = result.rows;
     
     const results = screenshots.map((s: any) => {
       const emb = JSON.parse(s.embedding);
@@ -296,8 +478,9 @@ app.post("/api/chat", async (req, res) => {
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 
     // Fetch context from DB
-    const placeholders = contextIds.map(() => "?").join(",");
-    const contextScreenshots = db.prepare(`SELECT summary, ocr_text, category FROM screenshots WHERE id IN (${placeholders})`).all(contextIds);
+    const placeholders = contextIds.map((_: any, i: number) => `$${i + 1}`).join(",");
+    const result = await pool.query(`SELECT summary, ocr_text, category FROM screenshots WHERE id IN (${placeholders})`, contextIds);
+    const contextScreenshots = result.rows;
 
     const contextText = contextScreenshots.map((s: any) => 
       `[Category: ${s.category}] Summary: ${s.summary}\nText: ${s.ocr_text}`
@@ -343,7 +526,7 @@ async function startServer() {
     app.use(vite.middlewares);
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  server.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
 }

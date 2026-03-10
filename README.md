@@ -1,59 +1,57 @@
-# AI Screenshot Organizer (School Project)
+# AI Screenshot Organizer (Apple Native)
 
-A production-ready web application that intelligently organizes your screenshots using Google's Gemini AI.
+A production-quality SwiftUI application for iOS and macOS that intelligently organizes screenshots using Apple's Vision framework and Google's Gemini AI.
 
 ## 🚀 Features
 
-- **AI Analysis**: Automatically extracts text (OCR), classifies content, identifies entities (dates, amounts, URLs), and generates summaries/tags.
-- **Local Persistence**: Uses **IndexedDB** to store all your data (images + metadata) directly in your browser. No backend required.
-- **Semantic Search**: Search your screenshots "by meaning" using vector embeddings.
-- **AI Chat (RAG)**: Ask questions about your screenshots in natural language.
-- **Premium UI**: Modern dark-themed interface with smooth animations and micro-interactions.
-- **Mock Mode**: Works even without an API key by simulating AI responses.
+### 1. Photos Auto-Import (PhotoKit)
+- **Smart Detection**: Automatically identifies screenshots in your Photos library.
+- **Auto-Import**: Observes library changes using `PHPhotoLibraryChangeObserver` to process new screenshots in the background.
+- **Manual Scan**: Trigger a full library scan from the Sources view.
+
+### 2. AI Analysis Pipeline
+- **On-Device OCR**: Uses Apple's **Vision** framework (`VNRecognizeTextRequest`) for fast, private text extraction.
+- **Hybrid AI (Gemini)**: 
+  - **Summarization**: Generates 1-2 line summaries of screenshot content.
+  - **Classification**: Categorizes into Chat, Receipt, Social Media, etc.
+  - **Entity Extraction**: Identifies dates, amounts, URLs, and emails.
+  - **Sensitive Detection**: Flags screenshots containing credentials or financial info.
+- **Privacy First**: OCR always happens on-device. Cloud AI is optional and requires a user-provided API key.
+
+### 3. Advanced Search & Chat
+- **Hybrid Search**: Combines keyword matching with semantic relevance.
+- **Semantic Search**: Uses Gemini embeddings for "search by meaning."
+- **AI Chat (RAG)**: Ask questions about your screenshots. The app retrieves relevant context and provides answers with visual references.
+
+### 4. Premium SwiftUI Design
+- **Modern Grid**: Responsive layout with smooth animations and micro-interactions.
+- **Detail View**: Full image preview with interactive tags and extracted metadata.
+- **Sources View**: Centralized control for permissions, auto-import, and AI settings.
 
 ## 🛠️ Tech Stack
+- **Language**: Swift 5.10+
+- **Framework**: SwiftUI
+- **Persistence**: SwiftData (Core Data successor)
+- **AI**: Vision (OCR), Gemini API (Analysis & Embeddings)
+- **Automation**: PhotoKit Change Observation, Background Tasks
 
-- **Vite + React + TypeScript**
-- **Tailwind CSS** (v4)
-- **IndexedDB** (via `idb`)
-- **Gemini AI** (via `@google/genai`)
-- **Motion** (for animations)
-- **Lucide React** (for icons)
+## 📦 Project Structure
+- `App/`: Main entry point and app configuration.
+- `Models/`: SwiftData models and supporting structures.
+- `Services/`: Core logic for Photos, OCR, AI, and Search.
+- `UI/`: Modular SwiftUI views for the library, details, and chat.
 
-## 📦 Setup Instructions
+## 🚦 How to Run
+1. Open the project in **Xcode 15+**.
+2. Ensure you are targeting **iOS 17+** or **macOS 14+**.
+3. Run the app on a physical device for the best Photos library experience.
+4. **Permissions**: Grant Photos access when prompted.
+5. **AI Setup**: Go to **Sources & AI** (iCloud icon) to enable Cloud-Enhanced AI and enter your Gemini API key.
 
-1. **Install Dependencies**:
-   ```bash
-   npm install
-   ```
-
-2. **Configure Environment Variables**:
-   Create a `.env` file in the root directory and add your Gemini API key:
-   ```env
-   VITE_GEMINI_API_KEY=your_api_key_here
-   ```
-   *Note: If you don't provide a key, the app will automatically enter **Mock Mode**.*
-
-3. **Run Development Server**:
-   ```bash
-   npm run dev
-   ```
-
-4. **Open the App**:
-   Navigate to `http://localhost:3000` in your browser.
-
-## 💡 How to Use
-
-1. **Upload**: Drag and drop screenshots into the sidebar or use the file picker.
-2. **Analyze**: The AI will automatically process the images. You'll see "AI is analyzing..." during this phase.
-3. **Explore**: Use the category filters or search bar to find specific screenshots.
-4. **Chat**: Click the floating Sparkles button in the bottom right to ask questions like "What was the total of my last receipt?" or "Find the screenshot with the flight booking."
-5. **Re-analyze**: If an analysis fails or you want to refresh it, hover over a card and click the refresh icon.
-
-## 🔒 Privacy & Security
-
-- **Local Storage**: Your images and OCR text are stored locally on your device.
-- **API Safety**: The app uses Gemini's safety filters to detect sensitive information (passwords, bank details) and flags them with a shield icon.
+## 🔒 Privacy Notes
+- All image processing for OCR is performed locally on your device.
+- Images are never uploaded to the cloud unless Cloud-Enhanced AI is enabled.
+- API keys are stored securely in the app's local storage (Keychain recommended for production).
 
 ---
 *Built for a school project demonstration.*

@@ -25,6 +25,28 @@ export interface ScreenshotEntities {
   merchant?: string;
 }
 
+export type SourceProvider = 'googleDrive' | 'icloudFolder';
+
+export interface SourceSettings {
+  keywords: string[];
+  dateRangeDays: number;
+  maxFiles: number;
+  autoSyncEnabled: boolean;
+  intervalMinutes: number;
+}
+
+export interface CloudSource {
+  id: string;
+  provider: SourceProvider;
+  status: 'connected' | 'disconnected' | 'error';
+  connectedAt: number;
+  lastSyncAt?: number;
+  accountEmail?: string;
+  localPath?: string;
+  agentStatus?: 'online' | 'offline';
+  settings: SourceSettings;
+}
+
 export interface ScreenshotMetadata {
   id?: string | number;
   userId?: string;
@@ -37,7 +59,16 @@ export interface ScreenshotMetadata {
   tags: string[];
   entities: ScreenshotEntities;
   embedding?: number[];
-  source: 'upload' | 'manual';
+  source: 'upload' | 'manual' | 'googleDrive' | 'icloudFolder';
+  sourceInfo?: {
+    provider: SourceProvider;
+    fileId?: string;
+    accountEmail?: string;
+    localPath?: string;
+    modifiedTime?: number;
+    webViewLink?: string;
+  };
+  importedAt?: number;
   imageUrl?: string;
   lastAnalyzedAt?: number;
   isAnalyzed: boolean;

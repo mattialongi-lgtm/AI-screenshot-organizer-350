@@ -26,68 +26,76 @@ export const ScreenshotCard: React.FC<ScreenshotCardProps> = ({
   return (
     <motion.div
       layout
-      initial={{ opacity: 0, scale: 0.9 }}
-      animate={{ opacity: 1, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.9 }}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
       onClick={onClick}
-      className="group relative bg-white dark:bg-slate-800 rounded-[24px] overflow-hidden border border-slate-200 dark:border-slate-700 cursor-pointer shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all"
+      className="editorial-card group cursor-pointer"
     >
-      <div className="aspect-[3/4] overflow-hidden relative">
+      <div className="aspect-[4/5] overflow-hidden relative border-b border-white/5">
         <img 
           src={imageUrl} 
           alt={screenshot.filename}
-          className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
+          className="w-full h-full object-cover transition-transform duration-[1.5s] ease-out group-hover:scale-105"
           onLoad={() => !screenshot.imageUrl && URL.revokeObjectURL(imageUrl)}
         />
         
+        {!screenshot.isAnalyzed && (
+          <div className="absolute inset-0 bg-ink/40 backdrop-blur-sm flex items-center justify-center">
+            <div className="scan-line" />
+            <span className="mono-label text-accent animate-pulse">Analyzing</span>
+          </div>
+        )}
+
         {/* Hover Overlay */}
-        <div className="absolute inset-0 bg-indigo-900/40 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center gap-3">
-          <button className="p-3 bg-white/20 backdrop-blur-md rounded-full text-white hover:bg-white/40 transition-colors">
-            <Eye className="w-5 h-5" />
-          </button>
-          <button 
-            onClick={onReanalyze}
-            className="p-3 bg-white/20 backdrop-blur-md rounded-full text-white hover:bg-white/40 transition-colors"
-          >
-            <RefreshCw className="w-5 h-5" />
-          </button>
-          <button 
-            onClick={onDelete}
-            className="p-3 bg-red-500/20 backdrop-blur-md rounded-full text-white hover:bg-red-500/40 transition-colors"
-          >
-            <Trash2 className="w-5 h-5" />
-          </button>
+        <div className="absolute inset-0 bg-ink/80 opacity-0 group-hover:opacity-100 transition-all duration-500 flex flex-col items-center justify-center gap-6">
+          <div className="flex gap-4">
+            <button className="w-12 h-12 border border-white/20 flex items-center justify-center text-bone hover:bg-bone hover:text-ink transition-all">
+              <Eye className="w-5 h-5" />
+            </button>
+            <button 
+              onClick={onReanalyze}
+              className="w-12 h-12 border border-white/20 flex items-center justify-center text-bone hover:bg-bone hover:text-ink transition-all"
+            >
+              <RefreshCw className="w-5 h-5" />
+            </button>
+            <button 
+              onClick={onDelete}
+              className="w-12 h-12 border border-accent/40 flex items-center justify-center text-accent hover:bg-accent hover:text-ink transition-all"
+            >
+              <Trash2 className="w-5 h-5" />
+            </button>
+          </div>
+          <span className="mono-label text-[8px]">Inspect Specimen</span>
         </div>
 
         {screenshot.isSensitive && (
-          <div className="absolute top-3 right-3 bg-red-500/90 backdrop-blur-md text-white p-1.5 rounded-full shadow-lg">
+          <div className="absolute top-4 right-4 bg-accent text-ink p-1.5 shadow-xl">
             <Shield className="w-3.5 h-3.5" />
           </div>
         )}
       </div>
 
-      <div className="p-5">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-widest">
+      <div className="p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <span className="mono-label text-accent">
             {screenshot.category}
           </span>
-          <div className="flex items-center gap-1 text-[10px] font-medium text-slate-400 dark:text-slate-500">
-            <Calendar className="w-3 h-3" />
-            <span>{new Date(screenshot.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>
-          </div>
+          <span className="mono-label">
+            {new Date(screenshot.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: '2-digit' })}
+          </span>
         </div>
-        <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100 line-clamp-2 leading-snug mb-3">
-          {screenshot.isAnalyzed ? screenshot.summary : 'Awaiting analysis...'}
+        
+        <h3 className="text-lg font-serif italic leading-tight group-hover:text-accent transition-colors">
+          {screenshot.isAnalyzed ? screenshot.summary : 'Awaiting intelligence...'}
         </h3>
-        <div className="flex flex-wrap gap-1.5">
-          {screenshot.tags.slice(0, 2).map((tag: string) => (
-            <span key={tag} className="px-2 py-0.5 bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 text-[10px] font-medium rounded-md">
-              #{tag}
+
+        <div className="flex flex-wrap gap-2 pt-2">
+          {screenshot.tags.slice(0, 3).map((tag: string) => (
+            <span key={tag} className="mono-label text-[8px] border border-white/10 px-2 py-1">
+              {tag}
             </span>
           ))}
-          {screenshot.tags.length > 2 && (
-            <span className="text-[10px] text-slate-400 font-medium">+{screenshot.tags.length - 2}</span>
-          )}
         </div>
       </div>
     </motion.div>

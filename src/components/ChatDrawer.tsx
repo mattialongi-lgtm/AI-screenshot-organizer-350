@@ -61,62 +61,67 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={onClose}
-            className="fixed inset-0 z-50 bg-slate-950/40 backdrop-blur-sm"
+            className="fixed inset-0 z-50 bg-ink/80 backdrop-blur-sm"
           />
           <motion.div 
             initial={{ x: '100%' }}
             animate={{ x: 0 }}
             exit={{ x: '100%' }}
-            transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-            className="fixed top-0 right-0 bottom-0 z-50 w-full max-w-md bg-white dark:bg-slate-900 shadow-2xl flex flex-col border-l border-slate-100 dark:border-slate-800"
+            transition={{ type: 'spring', damping: 30, stiffness: 300 }}
+            className="fixed top-0 right-0 bottom-0 z-50 w-full max-w-lg bg-ink shadow-2xl flex flex-col border-l border-white/10"
           >
-            <div className="p-6 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-white dark:bg-slate-900">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-500/20">
-                  <Sparkles className="w-5 h-5 text-white" />
+            <div className="p-10 border-b border-white/10 flex items-center justify-between bg-ink">
+              <div className="flex items-center gap-6">
+                <div className="w-12 h-12 bg-accent flex items-center justify-center rotate-3">
+                  <Sparkles className="w-6 h-6 text-ink" />
                 </div>
                 <div>
-                  <h2 className="text-lg font-bold text-slate-900 dark:text-white">AI Assistant</h2>
-                  <p className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-widest font-bold">Ask your screenshots</p>
+                  <h2 className="text-2xl font-serif italic leading-none">Query Engine</h2>
+                  <p className="mono-label mt-1 text-[9px]">Neural Archive Search</p>
                 </div>
               </div>
-              <button onClick={onClose} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">
-                <X className="w-5 h-5 text-slate-400" />
+              <button onClick={onClose} className="w-12 h-12 border border-white/10 flex items-center justify-center hover:bg-bone hover:text-ink transition-all">
+                <X className="w-6 h-6" />
               </button>
             </div>
 
-            <div ref={scrollRef} className="flex-1 overflow-y-auto p-6 space-y-6 no-scrollbar bg-slate-50/30 dark:bg-slate-950/30">
+            <div ref={scrollRef} className="flex-1 overflow-y-auto p-10 space-y-10 no-scrollbar bg-white/[0.01]">
               {messages.length === 0 && (
-                <div className="h-full flex flex-col items-center justify-center text-center space-y-4 px-6">
-                  <div className="w-16 h-16 bg-white dark:bg-slate-800 rounded-3xl flex items-center justify-center shadow-sm border border-slate-100 dark:border-slate-700">
-                    <MessageSquare className="w-8 h-8 text-indigo-500" />
+                <div className="h-full flex flex-col items-center justify-center text-center space-y-8 px-10">
+                  <div className="w-20 h-20 border border-white/5 flex items-center justify-center rotate-45">
+                    <MessageSquare className="w-8 h-8 text-white/10 -rotate-45" />
                   </div>
-                  <div>
-                    <p className="text-sm font-bold text-slate-900 dark:text-white">Ask me anything</p>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
-                      "What was the total of my last Amazon receipt?" or "Find the email from the booking screenshot."
+                  <div className="space-y-4">
+                    <p className="text-2xl font-serif italic text-bone">Awaiting Input</p>
+                    <p className="mono-label text-[10px] leading-relaxed opacity-50 max-w-[240px] mx-auto">
+                      "Analyze financial trends from recent receipts" or "Extract contact data from business cards."
                     </p>
                   </div>
                 </div>
               )}
               {messages.map((msg, i) => (
                 <div key={i} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+                  <div className="mono-label text-[8px] mb-2 opacity-30">
+                    {msg.role === 'user' ? 'LOCAL_USER' : 'ARCHIVE_CORE'}
+                  </div>
                   <div className={`
-                    max-w-[85%] p-4 rounded-2xl text-sm leading-relaxed
+                    max-w-[90%] p-6 text-sm leading-relaxed
                     ${msg.role === 'user' 
-                      ? 'bg-indigo-600 text-white rounded-tr-none' 
-                      : 'bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 shadow-sm border border-slate-100 dark:border-slate-700 rounded-tl-none'}
+                      ? 'bg-accent text-ink font-medium' 
+                      : 'bg-white/[0.03] text-bone border border-white/5 font-light'}
                   `}>
-                    <ReactMarkdown>{msg.text}</ReactMarkdown>
+                    <div className="markdown-body">
+                      <ReactMarkdown>{msg.text}</ReactMarkdown>
+                    </div>
                   </div>
                   {msg.ids && msg.ids.length > 0 && (
-                    <div className="mt-2 flex flex-wrap gap-2">
+                    <div className="mt-4 flex flex-wrap gap-2">
                       {msg.ids.map(id => {
                         const s = screenshots.find(sc => sc.id === id);
                         if (!s) return null;
                         return (
-                          <div key={id} className="flex items-center gap-1.5 px-2 py-1 bg-slate-100 dark:bg-slate-800 rounded-lg text-[10px] font-bold text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700">
-                            <ChevronRight className="w-3 h-3" />
+                          <div key={id} className="mono-label text-[8px] border border-white/10 px-2 py-1 flex items-center gap-2">
+                            <ChevronRight className="w-2 h-2 text-accent" />
                             Ref: {s.category}
                           </div>
                         );
@@ -126,27 +131,28 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({
                 </div>
               ))}
               {isLoading && (
-                <div className="flex items-start">
-                  <div className="bg-white dark:bg-slate-800 p-4 rounded-2xl rounded-tl-none border border-slate-100 dark:border-slate-700 shadow-sm">
-                    <Loader2 className="w-4 h-4 text-indigo-500 animate-spin" />
+                <div className="flex flex-col items-start">
+                  <div className="mono-label text-[8px] mb-2 opacity-30">ARCHIVE_CORE</div>
+                  <div className="bg-white/[0.03] p-6 border border-white/5">
+                    <Loader2 className="w-4 h-4 text-accent animate-spin" />
                   </div>
                 </div>
               )}
             </div>
 
-            <div className="p-6 bg-white dark:bg-slate-900 border-t border-slate-100 dark:border-slate-800">
-              <form onSubmit={handleSend} className="relative">
+            <div className="p-10 bg-ink border-t border-white/10">
+              <form onSubmit={handleSend} className="relative flex gap-4">
                 <input 
                   type="text" 
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  placeholder="Ask a question..."
-                  className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl px-5 py-4 pr-14 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all dark:text-white"
+                  placeholder="Execute query..."
+                  className="flex-1 bg-transparent border-b border-white/10 py-4 px-2 text-sm focus:border-accent focus:ring-0 transition-all placeholder:text-muted/30 text-bone"
                 />
                 <button 
                   type="submit"
                   disabled={!input.trim() || isLoading}
-                  className="absolute right-2 top-2 bottom-2 px-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl transition-all disabled:opacity-50 disabled:hover:bg-indigo-600"
+                  className="accent-button !px-4 !py-0 flex items-center justify-center disabled:opacity-30 disabled:grayscale"
                 >
                   <Send className="w-4 h-4" />
                 </button>
