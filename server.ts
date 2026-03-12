@@ -172,11 +172,18 @@ async function generateEmbedding(text: string) {
 }
 
 // Auth Routes
+const redirectUri =
+  "https://ai-screenshot-organizer-350.onrender.com/api/auth/google/callback";
+
 app.get("/api/auth/google/url", (req, res) => {
   const url = oauth2Client.generateAuthUrl({
     access_type: "offline",
-    scope: ["https://www.googleapis.com/auth/drive.readonly", "https://www.googleapis.com/auth/userinfo.email"],
+    scope: [
+      "https://www.googleapis.com/auth/drive.readonly",
+      "https://www.googleapis.com/auth/userinfo.email",
+    ],
     prompt: "consent",
+    redirect_uri: redirectUri,
   });
   res.json({ url });
 });
