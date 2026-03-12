@@ -38,12 +38,19 @@ async function uploadFile(filePath) {
     const ext = path.extname(filePath).toLowerCase();
     if (!['.png', '.jpg', '.jpeg', '.webp', '.heic'].includes(ext)) return;
 
+    // Enforce screenshot restriction
+    const isScreenshot = filePath.toLowerCase().includes('screenshot');
+    if (!isScreenshot) {
+      console.log(`🚫 Skipped (not a screenshot): ${path.basename(filePath)}`);
+      return;
+    }
+
     console.log(`📤 New file detected: ${path.basename(filePath)}`);
 
     const formData = new FormData();
     const fileBuffer = fs.readFileSync(filePath);
     const blob = new Blob([fileBuffer], { type: `image/${ext.replace('.', '')}` });
-    
+
     formData.append('file', blob, path.basename(filePath));
     formData.append('localPath', filePath);
     formData.append('modifiedTime', stats.mtime.toISOString());
@@ -74,7 +81,7 @@ watcher.on('add', (filePath) => uploadFile(filePath));
 let ws;
 function connectWS() {
   ws = new WebSocket(WS_URL);
-  
+
   ws.on('open', () => {
     console.log('📡 Connected to app server');
     ws.send(JSON.stringify({ type: 'agent:status', status: 'online', path: WATCH_PATH }));

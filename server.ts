@@ -323,24 +323,37 @@ app.post("/api/sync", async (req, res) => {
         });
 
         const drive = google.drive({ version: "v3", auth });
-        
-        // Build query
+
+        // Build query to restrict to screenshots
         const dateLimit = new Date();
         dateLimit.setDate(dateLimit.getDate() - settings.dateRangeDays);
         const rfc3339Date = dateLimit.toISOString();
 
-        let q = `mimeType contains 'image/' and modifiedTime > '${rfc3339Date}'`;
-        if (settings.keywords && settings.keywords.length > 0) {
-          const keywordQuery = settings.keywords.map((k: string) => `name contains '${k}'`).join(" or ");
-          q += ` and (${keywordQuery})`;
+        // Query for folders named "Screenshots"
+        let folderQuery = "mimeType = 'application/vnd.google-apps.folder' and name contains 'screenshot'";
+        let folderResponse;
+        try {
+          folderResponse = await drive.files.list({
+            q: folderQuery,
+            fields: "files(id, name)",
+            pageSize: 10
+          });
+        } catch (e) {
+          console.error("Failed to fetch folders:", e);
         }
 
-        const response = await drive.files.list({
-          q,
-          fields: "files(id, name, mimeType, modifiedTime, webViewLink)",
-          pageSize: settings.maxFiles || 50,
-          orderBy: "modifiedTime desc"
-        });
+        const folders = folderResponse?.data?.files || [];
+
+        let q = `mimeType contains 'image/' and modifiedTime > '${rfc3339Date}'`;
+
+        if (folders.length > 0) {
+          // If screenshot folders exist, restrict to those folders
+          const parentQueries = folders.map(f => `'${f.id}' in parents`).join(" or ");
+          q += ` and (${parentQueries})`;
+        } else {
+          // Fallback: require the word screenshot in the file name
+          q += ` and name contains 'screenshot'`;
+        }
 
         const files = response.data.files || [];
         let sourceSynced = 0;
@@ -384,17 +397,17 @@ app.post("/api/sync", async (req, res) => {
             ]);
             sourceSynced++;
             totalSynced++;
-            
+
             // Broadcast new file
-            broadcast({ 
-              type: 'google:newFile', 
+            broadcast({
+              type: 'google:newFile',
               data: {
                 id: file.id,
                 filename,
                 original_name: file.name,
                 upload_date: new Date().toISOString(),
                 source: 'googleDrive'
-              } 
+              }
             });
           } catch (err) {
             console.error(`Failed to sync file ${file.id}:`, err);
@@ -458,7 +471,7 @@ app.post("/api/search", async (req, res) => {
     // Simple cosine similarity in JS (for production use a vector DB like Pinecone or pgvector)
     const result = await pool.query("SELECT * FROM screenshots");
     const screenshots = result.rows;
-    
+
     const results = screenshots.map((s: any) => {
       const emb = JSON.parse(s.embedding);
       const similarity = dotProduct(queryEmbedding, emb) / (magnitude(queryEmbedding) * magnitude(emb));
@@ -482,7 +495,7 @@ app.post("/api/chat", async (req, res) => {
     const result = await pool.query(`SELECT summary, ocr_text, category FROM screenshots WHERE id IN (${placeholders})`, contextIds);
     const contextScreenshots = result.rows;
 
-    const contextText = contextScreenshots.map((s: any) => 
+    const contextText = contextScreenshots.map((s: any) =>
       `[Category: ${s.category}] Summary: ${s.summary}\nText: ${s.ocr_text}`
     ).join("\n---\n");
 
