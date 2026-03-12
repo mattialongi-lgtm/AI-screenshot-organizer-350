@@ -1,9 +1,9 @@
+import "dotenv/config";
 import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import multer from "multer";
-import pg from "pg";
-const { Pool } = pg;
+import { createClient } from "@supabase/supabase-js";
 import fs from "fs";
 import { GoogleGenAI, Type } from "@google/genai";
 import { fileURLToPath } from "url";
@@ -17,55 +17,11 @@ if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR);
 }
 
-// Database Setup
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false
-  }
-});
-
-async function initDb() {
-  const client = await pool.connect();
-  try {
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS screenshots (
-        id SERIAL PRIMARY KEY,
-        filename TEXT NOT NULL,
-        original_name TEXT NOT NULL,
-        upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        category TEXT,
-        summary TEXT,
-        ocr_text TEXT,
-        tags TEXT,
-        entities TEXT,
-        language TEXT,
-        embedding TEXT,
-        is_sensitive INTEGER DEFAULT 0,
-        source_id TEXT,
-        external_id TEXT UNIQUE,
-        userId TEXT
-      );
-
-      CREATE TABLE IF NOT EXISTS cloud_sources (
-        id TEXT PRIMARY KEY,
-        type TEXT NOT NULL,
-        email TEXT,
-        local_path TEXT,
-        access_token TEXT,
-        refresh_token TEXT,
-        status TEXT DEFAULT 'connected',
-        connected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        last_sync TIMESTAMP,
-        settings TEXT -- JSON string
-      );
-    `);
-  } finally {
-    client.release();
-  }
-}
-
-initDb().catch(console.error);
+// Supabase Setup
+const supabase = createClient(
+  process.env.VITE_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
 
 import { google } from "googleapis";
 import { WebSocketServer, WebSocket } from "ws";
@@ -112,8 +68,12 @@ app.post("/api/icloud/import", upload.single("file"), async (req, res) => {
     const { localPath, modifiedTime } = req.body;
 
     // Check if already exists
-    const existingRes = await pool.query("SELECT id FROM screenshots WHERE external_id = $1", [localPath]);
-    if (existingRes.rows.length > 0) {
+    const { data: existingScreenshots } = await supabase
+      .from('screenshots')
+      .select('id')
+      .eq('external_id', localPath);
+
+    if (existingScreenshots && existingScreenshots.length > 0) {
       fs.unlinkSync(req.file.path);
       return res.json({ success: true, skipped: true });
     }
@@ -121,27 +81,29 @@ app.post("/api/icloud/import", upload.single("file"), async (req, res) => {
     const analysis = await analyzeScreenshot(req.file.path);
     const embedding = await generateEmbedding(analysis.summary + " " + analysis.ocr_text);
 
-    const result = await pool.query(`
-      INSERT INTO screenshots (filename, original_name, category, summary, ocr_text, tags, entities, language, embedding, is_sensitive, source_id, external_id)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-      RETURNING id
-    `, [
-      req.file.filename,
-      req.file.originalname,
-      analysis.category,
-      analysis.summary,
-      analysis.ocr_text,
-      JSON.stringify(analysis.tags),
-      JSON.stringify(analysis.entities),
-      analysis.language,
-      JSON.stringify(embedding),
-      analysis.is_sensitive ? 1 : 0,
-      'icloud_folder',
-      localPath
-    ]);
+    const { data: dbData, error: dbError } = await supabase
+      .from('screenshots')
+      .insert([{
+        filename: req.file.filename,
+        original_name: req.file.originalname,
+        category: analysis.category,
+        summary: analysis.summary,
+        ocr_text: analysis.ocr_text,
+        tags: analysis.tags, // Supabase handles JSON arrays directly if column is jsonb/text[]
+        entities: analysis.entities,
+        language: analysis.language,
+        embedding: embedding,
+        is_sensitive: analysis.is_sensitive ? 1 : 0,
+        source_id: 'icloud_folder',
+        external_id: localPath
+      }])
+      .select()
+      .single();
+
+    if (dbError) throw dbError;
 
     const newScreenshot = {
-      id: result.rows[0].id,
+      id: dbData.id,
       ...analysis,
       filename: req.file.filename,
       original_name: req.file.originalname,
@@ -150,7 +112,7 @@ app.post("/api/icloud/import", upload.single("file"), async (req, res) => {
     };
 
     broadcast({ type: 'icloud:newFile', data: newScreenshot });
-    res.json({ success: true, id: result.lastInsertRowid });
+    res.json({ success: true, id: dbData.id });
   } catch (error) {
     console.error("iCloud import error:", error);
     res.status(500).json({ error: "Failed to process iCloud screenshot" });
@@ -228,14 +190,17 @@ app.get("/api/auth/google/callback", async (req, res) => {
     const oauth2 = google.oauth2({ version: "v2", auth: oauth2Client });
     const userInfo = await oauth2.userinfo.get();
 
-    await pool.query(`
-      INSERT INTO cloud_sources (id, type, email, access_token, refresh_token)
-      VALUES ($1, $2, $3, $4, $5)
-      ON CONFLICT (id) DO UPDATE SET
-        access_token = EXCLUDED.access_token,
-        refresh_token = EXCLUDED.refresh_token,
-        email = EXCLUDED.email
-    `, [userInfo.data.id, "google_drive", userInfo.data.email, tokens.access_token, tokens.refresh_token]);
+    const { error: upsertError } = await supabase
+      .from('cloud_sources')
+      .upsert({
+        id: userInfo.data.id,
+        type: "google_drive",
+        email: userInfo.data.email,
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token
+      });
+
+    if (upsertError) throw upsertError;
 
     res.send(`
       <html>
@@ -255,12 +220,16 @@ app.get("/api/auth/google/callback", async (req, res) => {
 });
 
 app.get("/api/sources", async (req, res) => {
-  const result = await pool.query("SELECT id, type as provider, email, local_path, last_sync, status, connected_at, settings FROM cloud_sources");
-  const sources = result.rows;
+  const { data: sources, error } = await supabase
+    .from('cloud_sources')
+    .select('id, type, email, local_path, last_sync, status, connected_at, settings');
+
+  if (error) return res.status(500).json({ error: error.message });
+
   res.json(sources.map((s: any) => ({
     ...s,
-    provider: s.provider === 'google_drive' ? 'googleDrive' : s.provider,
-    settings: s.settings ? JSON.parse(s.settings) : {
+    provider: s.type === 'google_drive' ? 'googleDrive' : s.type,
+    settings: s.settings ? (typeof s.settings === 'string' ? JSON.parse(s.settings) : s.settings) : {
       keywords: ["screenshot", "screen shot", "screenshots", "IMG_"],
       dateRangeDays: 30,
       maxFiles: 200,
@@ -273,14 +242,21 @@ app.get("/api/sources", async (req, res) => {
 app.post("/api/sources/:id/settings", async (req, res) => {
   const { id } = req.params;
   const { settings } = req.body;
-  await pool.query("UPDATE cloud_sources SET settings = $1 WHERE id = $2", [JSON.stringify(settings), id]);
+  await supabase
+    .from('cloud_sources')
+    .update({ settings })
+    .eq('id', id);
   res.json({ success: true });
 });
 
 app.post("/api/sources/:id/disconnect", async (req, res) => {
   const { id } = req.params;
-  const result = await pool.query("SELECT * FROM cloud_sources WHERE id = $1", [id]);
-  const source = result.rows[0];
+  const { data: source } = await supabase
+    .from('cloud_sources')
+    .select('*')
+    .eq('id', id)
+    .single();
+
   if (source && source.type === 'google_drive') {
     try {
       const auth = new google.auth.OAuth2(
@@ -293,19 +269,20 @@ app.post("/api/sources/:id/disconnect", async (req, res) => {
       console.error("Token revocation failed:", e);
     }
   }
-  await pool.query("DELETE FROM cloud_sources WHERE id = $1", [id]);
+  await supabase.from('cloud_sources').delete().eq('id', id);
   res.json({ success: true });
 });
 
 // Sync Logic
 app.post("/api/sync", async (req, res) => {
-  const sourcesRes = await pool.query("SELECT * FROM cloud_sources");
-  const sources = sourcesRes.rows;
+  const { data: sources, error } = await supabase.from('cloud_sources').select('*');
+  if (error) return res.status(500).json({ error: error.message });
+
   let totalSynced = 0;
   let results: any[] = [];
 
   for (const source of sources as any) {
-    const settings = source.settings ? JSON.parse(source.settings) : {
+    const settings = source.settings ? (typeof source.settings === 'string' ? JSON.parse(source.settings) : source.settings) : {
       keywords: ["screenshot", "screen shot", "screenshots", "IMG_"],
       dateRangeDays: 30,
       maxFiles: 200
@@ -355,6 +332,8 @@ app.post("/api/sync", async (req, res) => {
           q += ` and name contains 'screenshot'`;
         }
 
+        // FIX: Missing list call
+        const response = await drive.files.list({ q, fields: "files(id, name)" });
         const files = response.data.files || [];
         let sourceSynced = 0;
         let sourceSkipped = 0;
@@ -362,8 +341,12 @@ app.post("/api/sync", async (req, res) => {
 
         for (const file of files) {
           // Check if already synced
-          const existingRes = await pool.query("SELECT id FROM screenshots WHERE external_id = $1", [file.id]);
-          if (existingRes.rows.length > 0) {
+          const { data: existing } = await supabase
+            .from('screenshots')
+            .select('id')
+            .eq('external_id', file.id);
+
+          if (existing && existing.length > 0) {
             sourceSkipped++;
             continue;
           }
@@ -378,23 +361,23 @@ app.post("/api/sync", async (req, res) => {
             const analysis = await analyzeScreenshot(filePath);
             const embedding = await generateEmbedding(analysis.summary + " " + analysis.ocr_text);
 
-            await pool.query(`
-              INSERT INTO screenshots (filename, original_name, category, summary, ocr_text, tags, entities, language, embedding, is_sensitive, source_id, external_id)
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-            `, [
-              filename,
-              file.name,
-              analysis.category,
-              analysis.summary,
-              analysis.ocr_text,
-              JSON.stringify(analysis.tags),
-              JSON.stringify(analysis.entities),
-              analysis.language,
-              JSON.stringify(embedding),
-              analysis.is_sensitive ? 1 : 0,
-              source.id,
-              file.id
-            ]);
+            await supabase
+              .from('screenshots')
+              .insert([{
+                filename,
+                original_name: file.name,
+                category: analysis.category,
+                summary: analysis.summary,
+                ocr_text: analysis.ocr_text,
+                tags: analysis.tags,
+                entities: analysis.entities,
+                language: analysis.language,
+                embedding: embedding,
+                is_sensitive: analysis.is_sensitive ? 1 : 0,
+                source_id: source.id,
+                external_id: file.id
+              }]);
+
             sourceSynced++;
             totalSynced++;
 
@@ -414,7 +397,11 @@ app.post("/api/sync", async (req, res) => {
             sourceErrors++;
           }
         }
-        await pool.query("UPDATE cloud_sources SET last_sync = CURRENT_TIMESTAMP WHERE id = $1", [source.id]);
+        await supabase
+          .from('cloud_sources')
+          .update({ last_sync: new Date().toISOString() })
+          .eq('id', source.id);
+
         results.push({ provider: 'googleDrive', synced: sourceSynced, skipped: sourceSkipped, errors: sourceErrors });
       } catch (err) {
         console.error("Google Drive sync failed:", err);
@@ -434,24 +421,25 @@ app.post("/api/upload", upload.single("screenshot"), async (req, res) => {
     const analysis = await analyzeScreenshot(req.file.path);
     const embedding = await generateEmbedding(analysis.summary + " " + analysis.ocr_text);
 
-    const result = await pool.query(`
-      INSERT INTO screenshots (filename, original_name, category, summary, ocr_text, tags, entities, language, embedding, is_sensitive)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-      RETURNING id
-    `, [
-      req.file.filename,
-      req.file.originalname,
-      analysis.category,
-      analysis.summary,
-      analysis.ocr_text,
-      JSON.stringify(analysis.tags),
-      JSON.stringify(analysis.entities),
-      analysis.language,
-      JSON.stringify(embedding),
-      analysis.is_sensitive ? 1 : 0
-    ]);
+    const { data, error } = await supabase
+      .from('screenshots')
+      .insert([{
+        filename: req.file.filename,
+        original_name: req.file.originalname,
+        category: analysis.category,
+        summary: analysis.summary,
+        ocr_text: analysis.ocr_text,
+        tags: analysis.tags,
+        entities: analysis.entities,
+        language: analysis.language,
+        embedding: embedding,
+        is_sensitive: analysis.is_sensitive ? 1 : 0
+      }])
+      .select()
+      .single();
 
-    res.json({ id: result.rows[0].id, ...analysis });
+    if (error) throw error;
+    res.json({ id: data.id, ...analysis });
   } catch (error) {
     console.error("Upload error:", error);
     res.status(500).json({ error: "Failed to process screenshot" });
@@ -459,8 +447,13 @@ app.post("/api/upload", upload.single("screenshot"), async (req, res) => {
 });
 
 app.get("/api/screenshots", async (req, res) => {
-  const result = await pool.query("SELECT * FROM screenshots ORDER BY upload_date DESC");
-  res.json(result.rows);
+  const { data, error } = await supabase
+    .from('screenshots')
+    .select('*')
+    .order('upload_date', { ascending: false });
+  
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
 });
 
 app.post("/api/search", async (req, res) => {
@@ -468,12 +461,11 @@ app.post("/api/search", async (req, res) => {
     const { query } = req.body;
     const queryEmbedding = await generateEmbedding(query);
 
-    // Simple cosine similarity in JS (for production use a vector DB like Pinecone or pgvector)
-    const result = await pool.query("SELECT * FROM screenshots");
-    const screenshots = result.rows;
+    const { data: screenshots, error } = await supabase.from('screenshots').select('*');
+    if (error) throw error;
 
     const results = screenshots.map((s: any) => {
-      const emb = JSON.parse(s.embedding);
+      const emb = typeof s.embedding === 'string' ? JSON.parse(s.embedding) : s.embedding;
       const similarity = dotProduct(queryEmbedding, emb) / (magnitude(queryEmbedding) * magnitude(emb));
       return { ...s, similarity };
     });
@@ -491,9 +483,12 @@ app.post("/api/chat", async (req, res) => {
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 
     // Fetch context from DB
-    const placeholders = contextIds.map((_: any, i: number) => `$${i + 1}`).join(",");
-    const result = await pool.query(`SELECT summary, ocr_text, category FROM screenshots WHERE id IN (${placeholders})`, contextIds);
-    const contextScreenshots = result.rows;
+    const { data: contextScreenshots, error } = await supabase
+      .from('screenshots')
+      .select('summary, ocr_text, category')
+      .in('id', contextIds);
+
+    if (error) throw error;
 
     const contextText = contextScreenshots.map((s: any) =>
       `[Category: ${s.category}] Summary: ${s.summary}\nText: ${s.ocr_text}`
