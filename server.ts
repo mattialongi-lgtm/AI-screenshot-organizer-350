@@ -30,7 +30,7 @@ import http from "http";
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 // WebSocket connection handling
 const clients = new Set<WebSocket>();
@@ -451,7 +451,7 @@ app.get("/api/screenshots", async (req, res) => {
     .from('screenshots')
     .select('*')
     .order('upload_date', { ascending: false });
-  
+
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
@@ -534,7 +534,7 @@ async function startServer() {
     app.use(vite.middlewares);
   }
 
-  server.listen(PORT, "0.0.0.0", () => {
+  server.listen({ port: PORT, host: "0.0.0.0" }, () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
 }
