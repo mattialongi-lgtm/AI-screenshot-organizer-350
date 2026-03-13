@@ -278,9 +278,16 @@ export default function App() {
       const embedding = await generateEmbedding(`${result.summary} ${result.ocr_text}`);
       console.log("DEBUG: generateEmbedding complete");
 
+      // Map AnalysisResult fields to ScreenshotMetadata fields explicitly
       const updated: ScreenshotMetadata = {
         ...screenshot,
-        ...result,
+        category: result.category,
+        summary: result.summary,
+        ocrText: result.ocr_text,
+        tags: result.tags,
+        entities: result.entities,
+        isSensitive: result.safety?.contains_sensitive ?? false,
+        safetyReason: result.safety?.reason ?? '',
         embedding,
         isAnalyzed: true,
         lastAnalyzedAt: Date.now()
@@ -293,10 +300,22 @@ export default function App() {
 
       if (user && isSupabaseConfigured && updated.id) {
         console.log("DEBUG: Updating Supabase for:", updated.id);
-        const dbDataToUpdate = mapScreenshotToDb(updated);
+        // Only update analysis-related columns to avoid overwriting unrelated fields
+        const analysisUpdate = {
+          category: updated.category,
+          summary: updated.summary,
+          ocr_text: updated.ocrText,
+          tags: updated.tags,
+          entities: updated.entities,
+          embedding: updated.embedding,
+          is_sensitive: updated.isSensitive ? 1 : 0,
+          is_analyzed: 1,
+          safety_reason: updated.safetyReason,
+          last_analyzed_at: new Date(updated.lastAnalyzedAt!).toISOString(),
+        };
         const { error: dbError } = await supabase
           .from('screenshots')
-          .update(dbDataToUpdate)
+          .update(analysisUpdate)
           .eq('id', updated.id);
         
         if (dbError) {

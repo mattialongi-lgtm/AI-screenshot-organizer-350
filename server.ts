@@ -124,10 +124,16 @@ app.post("/api/icloud/import", upload.single("file"), async (req, res) => {
   }
 });
 
+// Use a single, explicit redirect URI for all OAuth operations to avoid mismatch
+const redirectUri =
+  process.env.APP_URL
+    ? `${process.env.APP_URL}/api/auth/google/callback`
+    : "https://ai-screenshot-organizer-350.onrender.com/api/auth/google/callback";
+
 const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
-  `${process.env.APP_URL}/api/auth/google/callback`
+  redirectUri
 );
 
 // AI Service Logic
@@ -198,9 +204,6 @@ async function generateEmbedding(text: string) {
 }
 
 // Auth Routes
-const redirectUri =
-  "https://ai-screenshot-organizer-350.onrender.com/api/auth/google/callback";
-
 app.get("/api/auth/google/url", (req, res) => {
   const url = oauth2Client.generateAuthUrl({
     access_type: "offline",
@@ -217,7 +220,10 @@ app.get("/api/auth/google/url", (req, res) => {
 app.get("/api/auth/google/callback", async (req, res) => {
   const { code } = req.query;
   try {
-    const { tokens } = await oauth2Client.getToken(code as string);
+    const { tokens } = await oauth2Client.getToken({
+      code: code as string,
+      redirect_uri: redirectUri,
+    });
     oauth2Client.setCredentials(tokens);
 
     const oauth2 = google.oauth2({ version: "v2", auth: oauth2Client });
