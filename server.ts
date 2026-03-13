@@ -49,6 +49,13 @@ function broadcast(data: any) {
 }
 
 app.use(express.json({ limit: '50mb' }));
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Headers", "Content-Type");
+  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
+});
 app.use("/uploads", express.static(UPLOADS_DIR));
 
 // Multer Setup
@@ -202,6 +209,124 @@ async function generateEmbedding(text: string) {
   });
   return result.embeddings[0].values;
 }
+
+// Frontend-facing AI proxy endpoints (used when frontend sets VITE_API_URL)
+app.post("/api/analyze", async (req, res) => {
+  try {
+    const { image, mimeType } = req.body;
+    if (!image) return res.status(400).json({ error: "No image data" });
+
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+    const response = await ai.models.generateContent({
+      model: "gemini-1.5-flash",
+      contents: [
+        {
+          parts: [
+            { inlineData: { mimeType: mimeType || "image/png", data: image } },
+            {
+              text: `Analyze this screenshot and return a JSON object with the following schema:
+              {
+                "category": "Chat" | "Receipt" | "Social Media" | "Email" | "Document" | "Meme" | "Banking" | "E-commerce" | "Booking" | "Other",
+                "summary": "1-2 line summary",
+                "ocr_text": "full extracted text",
+                "tags": ["tag1", "tag2", ...],
+                "entities": {
+                  "dates": [],
+                  "amounts": [],
+                  "emails": [],
+                  "urls": [],
+                  "phones": [],
+                  "order_ids": [],
+                  "merchant": ""
+                },
+                "safety": { "contains_sensitive": true/false, "reason": "" }
+              }`,
+            },
+          ],
+        },
+      ],
+      config: { responseMimeType: "application/json" },
+    });
+
+    let text = '';
+    const r = response as any;
+    if (typeof r.text === 'function') text = await r.text();
+    else if (typeof r.text === 'string') text = r.text;
+    else if (r.response && typeof r.response.text === 'function') text = await r.response.text();
+    else if (r.response && typeof r.response.text === 'string') text = r.response.text;
+
+    if (!text) throw new Error("Empty response from AI");
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    res.json(JSON.parse(jsonMatch ? jsonMatch[0] : text));
+  } catch (error) {
+    console.error("Analyze error:", error);
+    res.status(500).json({ error: "Analysis failed" });
+  }
+});
+
+app.post("/api/embed", async (req, res) => {
+  try {
+    const { text } = req.body;
+    if (!text) return res.status(400).json({ error: "No text provided" });
+    const embedding = await generateEmbedding(text);
+    res.json({ embedding });
+  } catch (error) {
+    console.error("Embed error:", error);
+    res.status(500).json({ error: "Embedding failed" });
+  }
+});
+
+app.post("/api/ask", async (req, res) => {
+  try {
+    const { question, context } = req.body;
+    if (!question) return res.status(400).json({ error: "No question provided" });
+
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+    const contextText = (context || []).map((s: any) =>
+      `ID: ${s.id}\nSummary: ${s.summary}\nOCR Text: ${s.ocrText}\nEntities: ${JSON.stringify(s.entities)}`
+    ).join("\n---\n");
+
+    const response = await ai.models.generateContent({
+      model: "gemini-1.5-flash",
+      contents: [
+        {
+          parts: [
+            {
+              text: `You are an AI assistant helping a user with their screenshots.
+              Answer the user's question using ONLY the provided context.
+              If the answer is not in the context, say you don't know.
+              Return a JSON object with the following schema:
+              {
+                "answer": "your answer here",
+                "used_ids": [id1, id2, ...]
+              }
+
+              Context:
+              ${contextText}
+
+              Question: ${question}`,
+            },
+          ],
+        },
+      ],
+      config: { responseMimeType: "application/json" },
+    });
+
+    let text = '';
+    const r = response as any;
+    if (typeof r.text === 'function') text = await r.text();
+    else if (typeof r.text === 'string') text = r.text;
+    else if (r.response && typeof r.response.text === 'function') text = await r.response.text();
+    else if (r.response && typeof r.response.text === 'string') text = r.response.text;
+
+    if (!text) throw new Error("Empty response from AI");
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    res.json(JSON.parse(jsonMatch ? jsonMatch[0] : text));
+  } catch (error) {
+    console.error("Ask error:", error);
+    res.status(500).json({ error: "Ask failed" });
+  }
+});
 
 // Auth Routes
 app.get("/api/auth/google/url", (req, res) => {
