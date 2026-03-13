@@ -49,8 +49,9 @@ function broadcast(data: any) {
 }
 
 app.use(express.json({ limit: '50mb' }));
+const allowedOrigin = process.env.CORS_ORIGIN || "*";
 app.use((req, res, next) => {
-  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Origin", allowedOrigin);
   res.header("Access-Control-Allow-Headers", "Content-Type");
   res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   if (req.method === "OPTIONS") return res.sendStatus(204);
@@ -211,6 +212,25 @@ async function generateEmbedding(text: string) {
 }
 
 // Frontend-facing AI proxy endpoints (used when frontend sets VITE_API_URL)
+async function extractResponseText(response: any): Promise<string> {
+  const r = response as any;
+  if (typeof r.text === 'function') return await r.text();
+  if (typeof r.text === 'string') return r.text;
+  if (r.response && typeof r.response.text === 'function') return await r.response.text();
+  if (r.response && typeof r.response.text === 'string') return r.response.text;
+  return '';
+}
+
+function parseJsonResponse(text: string) {
+  if (!text) throw new Error("Empty response from AI");
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  try {
+    return JSON.parse(jsonMatch ? jsonMatch[0] : text);
+  } catch (e) {
+    throw new Error("Invalid JSON from AI: " + text.slice(0, 200));
+  }
+}
+
 app.post("/api/analyze", async (req, res) => {
   try {
     const { image, mimeType } = req.body;
@@ -248,16 +268,8 @@ app.post("/api/analyze", async (req, res) => {
       config: { responseMimeType: "application/json" },
     });
 
-    let text = '';
-    const r = response as any;
-    if (typeof r.text === 'function') text = await r.text();
-    else if (typeof r.text === 'string') text = r.text;
-    else if (r.response && typeof r.response.text === 'function') text = await r.response.text();
-    else if (r.response && typeof r.response.text === 'string') text = r.response.text;
-
-    if (!text) throw new Error("Empty response from AI");
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    res.json(JSON.parse(jsonMatch ? jsonMatch[0] : text));
+    const text = await extractResponseText(response);
+    res.json(parseJsonResponse(text));
   } catch (error) {
     console.error("Analyze error:", error);
     res.status(500).json({ error: "Analysis failed" });
@@ -312,16 +324,8 @@ app.post("/api/ask", async (req, res) => {
       config: { responseMimeType: "application/json" },
     });
 
-    let text = '';
-    const r = response as any;
-    if (typeof r.text === 'function') text = await r.text();
-    else if (typeof r.text === 'string') text = r.text;
-    else if (r.response && typeof r.response.text === 'function') text = await r.response.text();
-    else if (r.response && typeof r.response.text === 'string') text = r.response.text;
-
-    if (!text) throw new Error("Empty response from AI");
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    res.json(JSON.parse(jsonMatch ? jsonMatch[0] : text));
+    const text = await extractResponseText(response);
+    res.json(parseJsonResponse(text));
   } catch (error) {
     console.error("Ask error:", error);
     res.status(500).json({ error: "Ask failed" });
