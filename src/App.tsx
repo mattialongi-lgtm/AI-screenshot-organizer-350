@@ -49,6 +49,8 @@ import { AuthButton } from './components/AuthButton';
 import { SourcesPage } from './pages/Sources';
 import { Cloud } from 'lucide-react';
 
+import { mapDbToScreenshot, mapScreenshotToDb } from './lib/mapping';
+
 export default function App() {
   const [currentPage, setCurrentPage] = useState<'home' | 'sources'>('home');
   const { user, loading: authLoading } = useSupabaseAuth();
@@ -103,18 +105,21 @@ export default function App() {
             filter: `userId=eq.${user.id}`
           },
           (payload) => {
+            console.log("Real-time event received:", payload.eventType, (payload.new as any)?.id);
             if (payload.eventType === 'INSERT') {
-              const newScreenshot = payload.new as ScreenshotMetadata;
+              const newScreenshot = mapDbToScreenshot(payload.new);
               setScreenshots(prev => {
                 if (prev.some(s => s.id === newScreenshot.id)) return prev;
                 return [newScreenshot, ...prev];
               });
             } else if (payload.eventType === 'UPDATE') {
-              const updated = payload.new as ScreenshotMetadata;
-              setScreenshots(prev => prev.map(s => s.id === updated.id ? updated : s));
-            } else if (payload.eventType === 'DELETE') {
+              const updated = mapDbToScreenshot(payload.new);
+              console.log("Updated screenshot from real-time:", updated.id, "isAnalyzed:", updated.isAnalyzed);
+              setScreenshots(prev => prev.map(s => String(s.id) === String(updated.id) ? { ...s, ...updated } : s));
+            }
+ else if (payload.eventType === 'DELETE') {
               const deletedId = payload.old.id;
-              setScreenshots(prev => prev.filter(s => s.id !== deletedId));
+              setScreenshots(prev => prev.filter(s => String(s.id) !== String(deletedId)));
             }
           }
         )
@@ -128,9 +133,11 @@ export default function App() {
           .eq('userId', user.id)
           .order('createdAt', { ascending: false });
         
+        
         if (data && !error) {
+          const mappedData = data.map(mapDbToScreenshot);
           setScreenshots(prev => {
-            const combined = [...data];
+            const combined = [...mappedData];
             prev.forEach(p => {
               if (!combined.some(c => c.id === p.id)) combined.push(p);
             });
@@ -207,12 +214,13 @@ export default function App() {
 
           const imageUrl = publicUrl;
           
+          
           // Save to Supabase DB
-          const { imageBlob, ...metadata } = newScreenshot;
+          const dbDataToInsert = mapScreenshotToDb(newScreenshot);
           const { data: dbData, error: dbError } = await supabase
             .from('screenshots')
             .insert([{
-              ...metadata,
+              ...dbDataToInsert,
               imageUrl,
               userId: user.id,
               storagePath: fileName
@@ -223,6 +231,9 @@ export default function App() {
           if (dbError) throw dbError;
           if (dbData) {
             newScreenshot.id = dbData.id;
+            console.log("Screenshot saved to Supabase:", dbData.id);
+            // Add to state immediately for responsiveness
+            setScreenshots(prev => [newScreenshot, ...prev]);
           }
         } else {
           const id = await saveScreenshot(newScreenshot);
@@ -230,6 +241,7 @@ export default function App() {
           setScreenshots(prev => [newScreenshot, ...prev]);
         }
         
+        console.log("Starting analysis for:", newScreenshot.id);
         // Start analysis
         processAnalysis(newScreenshot);
       } catch (err) {
@@ -240,42 +252,66 @@ export default function App() {
   };
 
   const processAnalysis = async (screenshot: ScreenshotMetadata) => {
+    if (screenshot.isAnalyzed) {
+      console.log("DEBUG: Screenshot already analyzed:", screenshot.id);
+      return;
+    }
+
     try {
+      console.log("DEBUG: processAnalysis started for:", screenshot.id);
       let blob = screenshot.imageBlob;
       if (!blob && screenshot.imageUrl) {
+        console.log("DEBUG: Fetching blob from URL:", screenshot.imageUrl);
         const response = await fetch(screenshot.imageUrl);
         blob = await response.blob();
       }
-      if (!blob) throw new Error("No image data available for analysis");
 
+      if (!blob) {
+        throw new Error("No image data available for analysis");
+      }
+
+      console.log("DEBUG: Calling analyzeScreenshot...");
       const result = await analyzeScreenshot(blob);
+      console.log("DEBUG: analyzeScreenshot result:", result.category);
+
+      console.log("DEBUG: Calling generateEmbedding...");
       const embedding = await generateEmbedding(`${result.summary} ${result.ocr_text}`);
-      
+      console.log("DEBUG: generateEmbedding complete");
+
       const updated: ScreenshotMetadata = {
         ...screenshot,
         ...result,
-        ocrText: result.ocr_text,
         embedding,
         isAnalyzed: true,
-        isSensitive: result.safety.contains_sensitive,
-        safetyReason: result.safety.reason,
         lastAnalyzedAt: Date.now()
       };
+      
+      console.log("DEBUG: Analysis successful for:", updated.id, "Summary:", result.summary);
+      
+      // Update state immediately with strict ID comparison
+      setScreenshots(prev => prev.map(s => String(s.id) === String(updated.id) ? updated : s));
 
-      if (user && isSupabaseConfigured && updated.id && typeof updated.id === 'string') {
-        const { imageBlob, ...metadata } = updated;
-        await supabase
+      if (user && isSupabaseConfigured && updated.id) {
+        console.log("DEBUG: Updating Supabase for:", updated.id);
+        const dbDataToUpdate = mapScreenshotToDb(updated);
+        const { error: dbError } = await supabase
           .from('screenshots')
-          .update(metadata)
+          .update(dbDataToUpdate)
           .eq('id', updated.id);
+        
+        if (dbError) {
+          console.error("DEBUG: Supabase update error:", dbError);
+        } else {
+          console.log("DEBUG: Supabase update success for:", updated.id);
+        }
       } else {
+        console.log("DEBUG: Updating local DB for:", updated.id);
         await updateScreenshot(updated);
-        setScreenshots(prev => prev.map(s => s.id === updated.id ? updated : s));
       }
     } catch (err) {
-      console.error("Analysis failed:", err);
-      const failed = { ...screenshot, isAnalyzed: false, summary: "Analysis failed. Click to retry." };
-      setScreenshots(prev => prev.map(s => s.id === failed.id ? failed : s));
+      console.error("DEBUG: processAnalysis FAILED for screenshot:", screenshot.id, err);
+      const failed = { ...screenshot, isAnalyzed: false, summary: "Analysis failed. See console for details." };
+      setScreenshots(prev => prev.map(s => String(s.id) === String(failed.id) ? failed : s));
     }
   };
 
@@ -303,7 +339,8 @@ export default function App() {
 
   const handleReanalyze = async (e: React.MouseEvent, s: ScreenshotMetadata) => {
     e.stopPropagation();
-    setScreenshots(prev => prev.map(item => item.id === s.id ? { ...item, isAnalyzed: false } : item));
+    console.log("Manual re-analyze requested for:", s.id);
+    setScreenshots(prev => prev.map(item => String(item.id) === String(s.id) ? { ...item, isAnalyzed: false } : item));
     processAnalysis(s);
   };
 

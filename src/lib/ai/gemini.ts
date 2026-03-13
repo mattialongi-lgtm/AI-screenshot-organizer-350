@@ -36,72 +36,111 @@ const MOCK_CHAT_RESPONSE: ChatResponse = {
 };
 
 export const analyzeScreenshot = async (imageBlob: Blob): Promise<AnalysisResult> => {
+  console.log("DEBUG: analyzeScreenshot started for blob type:", imageBlob.type);
   if (isMockMode) {
+    console.log("DEBUG: Mock mode active, returning mock analysis");
     await new Promise(resolve => setTimeout(resolve, 2000));
     return MOCK_ANALYSIS;
   }
 
   const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+  console.log("DEBUG: Converting blob to base64...");
   const base64Image = await blobToBase64(imageBlob);
+  console.log("DEBUG: Base64 conversion complete (length:", base64Image.length, ")");
 
-  const response = await ai.models.generateContent({
-    model: "gemini-3.1-flash-preview",
-    contents: [
-      {
-        parts: [
-          {
-            inlineData: {
-              mimeType: imageBlob.type,
-              data: base64Image.split(',')[1],
-            },
-          },
-          {
-            text: `Analyze this screenshot and return a JSON object with the following schema:
+  try {
+    console.log("DEBUG: Calling Gemini API via models.generateContent...");
+    const response = await ai.models.generateContent({
+      model: "gemini-1.5-flash",
+      contents: [
+        {
+          parts: [
             {
-              "category": "Chat" | "Receipt" | "Social Media" | "Email" | "Document" | "Meme" | "Banking" | "E-commerce" | "Booking" | "Other",
-              "summary": "1-2 line summary",
-              "ocr_text": "full extracted text",
-              "tags": ["tag1", "tag2", ...],
-              "entities": {
-                "dates": [],
-                "amounts": [],
-                "emails": [],
-                "urls": [],
-                "phones": [],
-                "order_ids": [],
-                "merchant": ""
+              inlineData: {
+                mimeType: imageBlob.type,
+                data: base64Image.split(',')[1],
               },
-              "safety": { "contains_sensitive": true/false, "reason": "" }
-            }`,
-          },
-        ],
+            },
+            {
+              text: `Analyze this screenshot and return a JSON object with the following schema:
+              {
+                "category": "Chat" | "Receipt" | "Social Media" | "Email" | "Document" | "Meme" | "Banking" | "E-commerce" | "Booking" | "Other",
+                "summary": "1-2 line summary",
+                "ocr_text": "full extracted text",
+                "tags": ["tag1", "tag2", ...],
+                "entities": {
+                  "dates": [],
+                  "amounts": [],
+                  "emails": [],
+                  "urls": [],
+                  "phones": [],
+                  "order_ids": [],
+                  "merchant": ""
+                },
+                "safety": { "contains_sensitive": true/false, "reason": "" }
+              }`,
+            },
+          ],
+        },
+      ],
+      config: {
+        responseMimeType: "application/json",
       },
-    ],
-    config: {
-      responseMimeType: "application/json",
-    },
-  });
+    });
 
-  return JSON.parse(response.text || "{}");
+    console.log("DEBUG: Response received from Gemini");
+
+    let text = '';
+    const res = response as any;
+    if (typeof res.text === 'function') {
+      text = await res.text();
+    } else if (typeof res.text === 'string') {
+      text = res.text;
+    } else if (res.response && typeof res.response.text === 'function') {
+      text = await res.response.text();
+    } else if (res.response && typeof res.response.text === 'string') {
+      text = res.response.text;
+    }
+
+    console.log("DEBUG: Raw AI text:", text.slice(0, 100), "...");
+
+    if (!text) throw new Error("Empty response from AI");
+
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : text);
+    console.log("DEBUG: Parse successful, category:", parsed.category);
+    return parsed;
+  } catch (err) {
+    console.error("DEBUG: Gemini API ERROR:", err);
+    throw err;
+  }
 };
 
 export const generateEmbedding = async (text: string): Promise<number[]> => {
+  console.log("DEBUG: generateEmbedding started for text length:", text.length);
   if (isMockMode) {
     return Array(768).fill(0).map(() => Math.random());
   }
 
   const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
-  const result = await ai.models.embedContent({
-    model: "text-embedding-004",
-    contents: [{ parts: [{ text }] }],
-  });
-  return result.embeddings[0].values;
+  try {
+    const result = await ai.models.embedContent({
+      model: "text-embedding-004",
+      contents: [{ parts: [{ text }] }],
+    });
+    console.log("DEBUG: Embedding generation complete");
+    return (result as any).embeddings[0].values || (result as any).embedding.values;
+  } catch (err) {
+    console.error("DEBUG: Embedding ERROR:", err);
+    throw err;
+  }
 };
 
 export const askScreenshots = async (
   question: string, 
   relevantScreenshots: ScreenshotMetadata[]
 ): Promise<ChatResponse> => {
+  console.log("DEBUG: askScreenshots started for question:", question);
   if (isMockMode) {
     await new Promise(resolve => setTimeout(resolve, 1500));
     return MOCK_CHAT_RESPONSE;
@@ -112,35 +151,58 @@ export const askScreenshots = async (
     `ID: ${s.id}\nSummary: ${s.summary}\nOCR Text: ${s.ocrText}\nEntities: ${JSON.stringify(s.entities)}`
   ).join("\n---\n");
 
-  const response = await ai.models.generateContent({
-    model: "gemini-3.1-flash-preview",
-    contents: [
-      {
-        parts: [
-          {
-            text: `You are an AI assistant helping a user with their screenshots.
-            Answer the user's question using ONLY the provided context.
-            If the answer is not in the context, say you don't know.
-            Return a JSON object with the following schema:
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-1.5-flash",
+      contents: [
+        {
+          parts: [
             {
-              "answer": "your answer here",
-              "used_ids": [id1, id2, ...]
-            }
+              text: `You are an AI assistant helping a user with their screenshots.
+              Answer the user's question using ONLY the provided context.
+              If the answer is not in the context, say you don't know.
+              Return a JSON object with the following schema:
+              {
+                "answer": "your answer here",
+                "used_ids": [id1, id2, ...]
+              }
 
-            Context:
-            ${context}
+              Context:
+              ${context}
 
-            Question: ${question}`,
-          },
-        ],
+              Question: ${question}`,
+            },
+          ],
+        },
+      ],
+      config: {
+        responseMimeType: "application/json",
       },
-    ],
-    config: {
-      responseMimeType: "application/json",
-    },
-  });
+    });
 
-  return JSON.parse(response.text || "{}");
+    let text = '';
+    const res = response as any;
+    if (typeof res.text === 'function') {
+      text = await res.text();
+    } else if (typeof res.text === 'string') {
+      text = res.text;
+    } else if (res.response && typeof res.response.text === 'function') {
+      text = await res.response.text();
+    } else if (res.response && typeof res.response.text === 'string') {
+      text = res.response.text;
+    }
+
+    console.log("DEBUG: Raw chat AI text:", text.slice(0, 100), "...");
+    
+    if (!text) throw new Error("Empty chat response from AI");
+
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : text);
+    return parsed;
+  } catch (err) {
+    console.error("DEBUG: Chat ERROR:", err);
+    throw err;
+  }
 };
 
 const blobToBase64 = (blob: Blob): Promise<string> => {

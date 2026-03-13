@@ -94,13 +94,18 @@ app.post("/api/icloud/import", upload.single("file"), async (req, res) => {
         language: analysis.language,
         embedding: embedding,
         is_sensitive: analysis.is_sensitive ? 1 : 0,
+        is_analyzed: 1,
         source_id: 'icloud_folder',
         external_id: localPath
       }])
       .select()
       .single();
 
-    if (dbError) throw dbError;
+    if (dbError) {
+      console.error("Supabase insert error (iCloud):", dbError);
+      throw dbError;
+    }
+    console.log("Supabase insert success (iCloud):", dbData.id);
 
     const newScreenshot = {
       id: dbData.id,
@@ -131,7 +136,7 @@ async function analyzeScreenshot(filePath: string) {
   const imageData = fs.readFileSync(filePath).toString("base64");
 
   const response = await ai.models.generateContent({
-    model: "gemini-3.1-flash-preview",
+    model: "gemini-1.5-flash",
     contents: [
       {
         parts: [
@@ -159,7 +164,28 @@ async function analyzeScreenshot(filePath: string) {
     },
   });
 
-  return JSON.parse(response.text || "{}");
+  // Handle different SDK response formats
+  let text = '';
+  const res = response as any;
+  if (typeof res.text === 'function') {
+    text = await res.text();
+  } else if (typeof res.text === 'string') {
+    text = res.text;
+  } else if (res.response && typeof res.response.text === 'function') {
+    text = await res.response.text();
+  } else if (res.response && typeof res.response.text === 'string') {
+    text = res.response.text;
+  }
+
+  if (!text) throw new Error("Empty response from AI");
+
+  try {
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    return JSON.parse(jsonMatch ? jsonMatch[0] : text);
+  } catch (e) {
+    console.error("JSON Parse Error in server.ts:", e, "Raw text:", text);
+    throw new Error("Invalid format from AI");
+  }
 }
 
 async function generateEmbedding(text: string) {
@@ -368,7 +394,7 @@ app.post("/api/sync", async (req, res) => {
             const analysis = await analyzeScreenshot(filePath);
             const embedding = await generateEmbedding(analysis.summary + " " + analysis.ocr_text);
 
-            await supabase
+            const { error: insError } = await supabase
               .from('screenshots')
               .insert([{
                 filename,
@@ -381,9 +407,13 @@ app.post("/api/sync", async (req, res) => {
                 language: analysis.language,
                 embedding: embedding,
                 is_sensitive: analysis.is_sensitive ? 1 : 0,
+                is_analyzed: 1,
                 source_id: source.id,
                 external_id: file.id
               }]);
+            
+            if (insError) console.error("Supabase insert error (Google Drive):", insError);
+            else console.log("Supabase insert success (Google Drive):", file.id);
 
             sourceSynced++;
             totalSynced++;
@@ -440,12 +470,17 @@ app.post("/api/upload", upload.single("screenshot"), async (req, res) => {
         entities: analysis.entities,
         language: analysis.language,
         embedding: embedding,
-        is_sensitive: analysis.is_sensitive ? 1 : 0
+        is_sensitive: analysis.is_sensitive ? 1 : 0,
+        is_analyzed: 1
       }])
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      console.error("Supabase insert error (Upload):", error);
+      throw error;
+    }
+    console.log("Supabase insert success (Upload):", data.id);
     res.json({ id: data.id, ...analysis });
   } catch (error) {
     console.error("Upload error:", error);
@@ -502,7 +537,7 @@ app.post("/api/chat", async (req, res) => {
     ).join("\n---\n");
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.1-flash-preview",
+      model: "gemini-1.5-flash",
       contents: [
         {
           parts: [
