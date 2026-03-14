@@ -51,7 +51,7 @@ export const analyzeScreenshot = async (imageBlob: Blob): Promise<AnalysisResult
   try {
     console.log("DEBUG: Calling Gemini API via models.generateContent...");
     const response = await ai.models.generateContent({
-      model: "gemini-1.5-flash",
+      model: "gemini-2.5-flash",
       contents: [
         {
           parts: [
@@ -125,7 +125,7 @@ export const generateEmbedding = async (text: string): Promise<number[]> => {
   const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
   try {
     const result = await ai.models.embedContent({
-      model: "text-embedding-004",
+      model: "gemini-embedding-2-preview",
       contents: [{ parts: [{ text }] }],
     });
     console.log("DEBUG: Embedding generation complete");
@@ -153,7 +153,7 @@ export const askScreenshots = async (
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-1.5-flash",
+      model: "gemini-2.5-flash",
       contents: [
         {
           parts: [
