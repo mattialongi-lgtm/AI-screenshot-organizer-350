@@ -227,7 +227,7 @@ export default function App() {
             .from('screenshots')
             .insert([{
             ...dbDataToInsert,
-            image_url: imageUrl,
+            imageUrl: imageUrl, // Reverted to camelCase
             user_id: user.id,
             upload_date: new Date().toISOString(),
             storage_path: fileName

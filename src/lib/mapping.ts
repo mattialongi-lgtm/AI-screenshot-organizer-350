@@ -50,7 +50,7 @@ export const mapScreenshotToDb = (screenshot: ScreenshotMetadata): any => {
     upload_date: new Date(screenshot.createdAt).toISOString(),
     safety_reason: screenshot.safetyReason,
     last_analyzed_at: screenshot.lastAnalyzedAt ? new Date(screenshot.lastAnalyzedAt).toISOString() : null,
-    image_url: screenshot.imageUrl,
+    imageUrl: screenshot.imageUrl,
     source: screenshot.source
   };
 };
