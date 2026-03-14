@@ -146,11 +146,11 @@ const oauth2Client = new google.auth.OAuth2(
 
 // AI Service Logic
 async function analyzeScreenshot(filePath: string) {
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+  const ai = new GoogleGenAI({ apiKey: process.env.VITE_GEMINI_API_KEY! });
   const imageData = fs.readFileSync(filePath).toString("base64");
 
   const response = await ai.models.generateContent({
-    model: "gemini-1.5-flash",
+    model: "gemini-2.5-flash",
     contents: [
       {
         parts: [
@@ -161,14 +161,23 @@ async function analyzeScreenshot(filePath: string) {
             },
           },
           {
-            text: `Analyze this screenshot and return a JSON object with the following fields:
-            - category: One of [Chat, Receipt, Social Media, Email, Document, Meme, Banking, E-commerce, Booking, Other]
-            - summary: A concise 1-2 sentence summary of the content.
-            - ocr_text: Full extracted text from the image.
-            - tags: An array of descriptive tags.
-            - entities: An object containing detected entities like dates, prices, URLs, names, order numbers.
-            - language: The detected language (e.g., English, Spanish).
-            - is_sensitive: Boolean, true if it contains passwords, bank details, or highly personal info.`,
+            text: `Analyze this screenshot and return a JSON object with the following schema:
+            {
+              "category": "Chat" | "Receipt" | "Social Media" | "Email" | "Document" | "Meme" | "Banking" | "E-commerce" | "Booking" | "Other",
+              "summary": "1-2 line summary",
+              "ocr_text": "full extracted text",
+              "tags": ["tag1", "tag2", ...],
+              "entities": {
+                "dates": [],
+                "amounts": [],
+                "emails": [],
+                "urls": [],
+                "phones": [],
+                "order_ids": [],
+                "merchant": ""
+              },
+              "safety": { "contains_sensitive": true/false, "reason": "" }
+            }`,
           },
         ],
       },
@@ -203,12 +212,12 @@ async function analyzeScreenshot(filePath: string) {
 }
 
 async function generateEmbedding(text: string) {
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+  const ai = new GoogleGenAI({ apiKey: process.env.VITE_GEMINI_API_KEY! });
   const result = await ai.models.embedContent({
-    model: "text-embedding-004",
+    model: "gemini-embedding-2-preview",
     contents: [{ parts: [{ text }] }],
   });
-  return result.embeddings[0].values;
+  return (result as any).embeddings[0].values || (result as any).embedding.values;
 }
 
 // Frontend-facing AI proxy endpoints (used when frontend sets VITE_API_URL)
@@ -236,9 +245,9 @@ app.post("/api/analyze", async (req, res) => {
     const { image, mimeType } = req.body;
     if (!image) return res.status(400).json({ error: "No image data" });
 
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+    const ai = new GoogleGenAI({ apiKey: process.env.VITE_GEMINI_API_KEY! });
     const response = await ai.models.generateContent({
-      model: "gemini-1.5-flash",
+      model: "gemini-2.5-flash",
       contents: [
         {
           parts: [
@@ -293,13 +302,13 @@ app.post("/api/ask", async (req, res) => {
     const { question, context } = req.body;
     if (!question) return res.status(400).json({ error: "No question provided" });
 
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+    const ai = new GoogleGenAI({ apiKey: process.env.VITE_GEMINI_API_KEY! });
     const contextText = (context || []).map((s: any) =>
       `ID: ${s.id}\nSummary: ${s.summary}\nOCR Text: ${s.ocrText}\nEntities: ${JSON.stringify(s.entities)}`
     ).join("\n---\n");
 
     const response = await ai.models.generateContent({
-      model: "gemini-1.5-flash",
+      model: "gemini-2.5-flash",
       contents: [
         {
           parts: [
@@ -657,7 +666,7 @@ app.post("/api/search", async (req, res) => {
 app.post("/api/chat", async (req, res) => {
   try {
     const { message, contextIds } = req.body;
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+    const ai = new GoogleGenAI({ apiKey: process.env.VITE_GEMINI_API_KEY! });
 
     // Fetch context from DB
     const { data: contextScreenshots, error } = await supabase
@@ -672,7 +681,7 @@ app.post("/api/chat", async (req, res) => {
     ).join("\n---\n");
 
     const response = await ai.models.generateContent({
-      model: "gemini-1.5-flash",
+      model: "gemini-2.5-flash",
       contents: [
         {
           parts: [
