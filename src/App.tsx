@@ -227,7 +227,7 @@ export default function App() {
             .from('screenshots')
             .insert([{
             ...dbDataToInsert,
-            imageUrl,
+            image_url: imageUrl,
             user_id: user.id,
             upload_date: new Date().toISOString(),
             storage_path: fileName
@@ -347,12 +347,12 @@ export default function App() {
         // Delete from Supabase Storage and DB
         const { data } = await supabase
           .from('screenshots')
-          .select('storagePath')
+          .select('storage_path')
           .eq('id', id)
           .single();
 
-        if (data?.storagePath) {
-          await supabase.storage.from('screenshots').remove([data.storagePath]);
+        if (data?.storage_path) {
+          await supabase.storage.from('screenshots').remove([data.storage_path]);
         }
         await supabase.from('screenshots').delete().eq('id', id);
       } else {
