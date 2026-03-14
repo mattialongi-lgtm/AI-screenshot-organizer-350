@@ -61,17 +61,25 @@ export default function App() {
   const [activeCategory, setActiveCategory] = useState<Category | 'All'>('All');
   const [hasAmount, setHasAmount] = useState(false);
   const [hasUrl, setHasUrl] = useState(false);
-  
+
   const [selectedScreenshot, setSelectedScreenshot] = useState<ScreenshotMetadata | null>(null);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [darkMode, setDarkMode] = useState(true);
 
-  // WebSocket for real-time updates
+  // Connect to WebSocket for real-time analysis updates
   useEffect(() => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${protocol}//${window.location.host}`);
-    
+    const getWsUrl = () => {
+      const apiUrl = import.meta.env.VITE_API_URL;
+      if (apiUrl) {
+        return apiUrl.replace('http', 'ws');
+      }
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      return `${protocol}//${window.location.host}`;
+    };
+
+    const ws = new WebSocket(getWsUrl());
+
     ws.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data);
@@ -116,8 +124,7 @@ export default function App() {
               const updated = mapDbToScreenshot(payload.new);
               console.log("Updated screenshot from real-time:", updated.id, "isAnalyzed:", updated.isAnalyzed);
               setScreenshots(prev => prev.map(s => String(s.id) === String(updated.id) ? { ...s, ...updated } : s));
-            }
- else if (payload.eventType === 'DELETE') {
+            } else if (payload.eventType === 'DELETE') {
               const deletedId = payload.old.id;
               setScreenshots(prev => prev.filter(s => String(s.id) !== String(deletedId)));
             }
@@ -130,7 +137,7 @@ export default function App() {
         const { data, error } = await supabase
           .from('screenshots')
           .select('*')
-          .or(`userId.eq.${user.id},user_id.eq.${user.id}`)
+          .eq('user_id', user.id)
           .order('upload_date', { ascending: false });
         
         if (data && !error) {
@@ -221,12 +228,9 @@ export default function App() {
             .insert([{
             ...dbDataToInsert,
             imageUrl,
-            userId: user.id,
             user_id: user.id,
             upload_date: new Date().toISOString(),
-            createdAt: new Date().toISOString(),
-            storage_path: fileName,
-            storagePath: fileName
+            storage_path: fileName
           }])
             .select()
             .single();
