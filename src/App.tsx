@@ -426,9 +426,9 @@ export default function App() {
             </div>
             <div className="flex flex-col">
               <h1 className="text-2xl font-serif italic leading-none tracking-tight">
-                Archive <span className="text-accent">.</span> AI
+                Screen <span className="text-accent">.</span> Sort
               </h1>
-              <span className="mono-label mt-1">Screenshot Intelligence</span>
+              <span className="mono-label mt-1">Intelligent Organization</span>
             </div>
           </div>
 
