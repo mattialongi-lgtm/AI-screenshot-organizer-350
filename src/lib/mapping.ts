@@ -9,7 +9,7 @@ export const mapDbToScreenshot = (dbData: any): ScreenshotMetadata => {
   return {
     id: dbData.id,
     userId: dbData.userId || dbData.user_id,
-    createdAt: new Date(dbData.createdAt || dbData.created_at).getTime(),
+    createdAt: new Date(dbData.createdAt || dbData.created_at || dbData.upload_date || Date.now()).getTime(),
     filename: dbData.filename || dbData.original_name,
     ocrText: dbData.ocrText || dbData.ocr_text || '',
     summary: dbData.summary || '',
@@ -47,7 +47,7 @@ export const mapScreenshotToDb = (screenshot: ScreenshotMetadata): any => {
     is_sensitive: screenshot.isSensitive ? 1 : 0,
     is_analyzed: screenshot.isAnalyzed ? 1 : 0,
     user_id: screenshot.userId,
-    created_at: new Date(screenshot.createdAt).toISOString(),
+    upload_date: new Date(screenshot.createdAt).toISOString(),
     safety_reason: screenshot.safetyReason,
     last_analyzed_at: screenshot.lastAnalyzedAt ? new Date(screenshot.lastAnalyzedAt).toISOString() : null,
     image_url: screenshot.imageUrl,

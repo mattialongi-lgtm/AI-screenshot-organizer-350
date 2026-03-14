@@ -595,10 +595,13 @@ export default function App() {
           if (s) {
             const updated = { ...s, tags };
             if (user && isSupabaseConfigured && typeof id === 'string') {
-              const { imageBlob, ...metadata } = updated;
+              const dbUpdate = mapScreenshotToDb(updated);
+              // Remove fields that shouldn't be updated or cause issues
+              delete dbUpdate.id; 
+              
               await supabase
                 .from('screenshots')
-                .update(metadata)
+                .update(dbUpdate)
                 .eq('id', id);
             } else {
               await updateScreenshot(updated);
