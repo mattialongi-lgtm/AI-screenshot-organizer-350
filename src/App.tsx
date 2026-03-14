@@ -214,23 +214,17 @@ export default function App() {
 
           if (uploadError) throw uploadError;
 
-          const { data: { publicUrl } } = supabase.storage
-            .from('screenshots')
-            .getPublicUrl(fileName);
+          // Align with database schema: store full path in filename
+          newScreenshot.filename = fileName;
 
-          const imageUrl = publicUrl;
-          
-          
-          // Save to Supabase DB
+          // Save to Supabase DB (mapScreenshotToDb handles standard fields)
           const dbDataToInsert = mapScreenshotToDb(newScreenshot);
           const { data: dbData, error: dbError } = await supabase
             .from('screenshots')
             .insert([{
             ...dbDataToInsert,
-            imageUrl: imageUrl, // Reverted to camelCase
             user_id: user.id,
-            upload_date: new Date().toISOString(),
-            storage_path: fileName
+            upload_date: new Date().toISOString()
           }])
             .select()
             .single();

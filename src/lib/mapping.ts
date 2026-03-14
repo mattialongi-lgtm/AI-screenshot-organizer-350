@@ -6,11 +6,26 @@
 import { ScreenshotMetadata, Category } from '../types';
 
 export const mapDbToScreenshot = (dbData: any): ScreenshotMetadata => {
+  const userId = dbData.userId || dbData.user_id;
+  const filename = dbData.filename || dbData.original_name;
+  
+  // Reconstruct imageUrl from storage path if not directly provided
+  let imageUrl = dbData.imageUrl || dbData.image_url;
+  if (!imageUrl && userId && filename) {
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+    if (supabaseUrl) {
+      // Filename usually contains the folder structure in our new implementation
+      // formats: "user_id/filename" or just "filename"
+      const path = filename.includes('/') ? filename : `${userId}/${filename}`;
+      imageUrl = `${supabaseUrl}/storage/v1/object/public/screenshots/${path}`;
+    }
+  }
+
   return {
     id: dbData.id,
-    userId: dbData.userId || dbData.user_id,
+    userId,
     createdAt: new Date(dbData.createdAt || dbData.created_at || dbData.upload_date || Date.now()).getTime(),
-    filename: dbData.filename || dbData.original_name,
+    filename,
     ocrText: dbData.ocrText || dbData.ocr_text || '',
     summary: dbData.summary || '',
     category: (dbData.category || 'Other') as Category,
@@ -18,7 +33,7 @@ export const mapDbToScreenshot = (dbData: any): ScreenshotMetadata => {
     entities: dbData.entities || { dates: [], amounts: [], emails: [], urls: [], phones: [], order_ids: [] },
     embedding: dbData.embedding,
     source: dbData.source || 'upload',
-    imageUrl: dbData.imageUrl || dbData.image_url,
+    imageUrl,
     isAnalyzed: !!(
       dbData.is_analyzed === 1 || 
       dbData.is_analyzed === true || 
@@ -50,7 +65,6 @@ export const mapScreenshotToDb = (screenshot: ScreenshotMetadata): any => {
     upload_date: new Date(screenshot.createdAt).toISOString(),
     safety_reason: screenshot.safetyReason,
     last_analyzed_at: screenshot.lastAnalyzedAt ? new Date(screenshot.lastAnalyzedAt).toISOString() : null,
-    imageUrl: screenshot.imageUrl,
     source: screenshot.source
   };
 };
