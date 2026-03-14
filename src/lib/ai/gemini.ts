@@ -7,9 +7,8 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { AnalysisResult, Category, ChatResponse, ScreenshotMetadata } from "../../types";
 
 const GEMINI_API_KEY = (import.meta as any).env.VITE_GEMINI_API_KEY;
-const API_URL = (import.meta as any).env.VITE_API_URL;
 
-export const isMockMode = !GEMINI_API_KEY && !API_URL;
+export const isMockMode = !GEMINI_API_KEY;
 
 const MOCK_ANALYSIS: AnalysisResult = {
   category: "Receipt",
@@ -42,18 +41,6 @@ export const analyzeScreenshot = async (imageBlob: Blob): Promise<AnalysisResult
     console.log("DEBUG: Mock mode active, returning mock analysis");
     await new Promise(resolve => setTimeout(resolve, 2000));
     return MOCK_ANALYSIS;
-  }
-
-  if (API_URL) {
-    console.log("DEBUG: Using backend API at", API_URL);
-    const base64Image = await blobToBase64(imageBlob);
-    const res = await fetch(`${API_URL}/api/analyze`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ image: base64Image.split(',')[1], mimeType: imageBlob.type }),
-    });
-    if (!res.ok) throw new Error(`Backend analyze failed: ${res.status}`);
-    return await res.json();
   }
 
   const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
@@ -135,17 +122,6 @@ export const generateEmbedding = async (text: string): Promise<number[]> => {
     return Array(768).fill(0).map(() => Math.random());
   }
 
-  if (API_URL) {
-    const res = await fetch(`${API_URL}/api/embed`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    });
-    if (!res.ok) throw new Error(`Backend embed failed: ${res.status}`);
-    const data = await res.json();
-    return data.embedding;
-  }
-
   const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
   try {
     const result = await ai.models.embedContent({
@@ -168,22 +144,6 @@ export const askScreenshots = async (
   if (isMockMode) {
     await new Promise(resolve => setTimeout(resolve, 1500));
     return MOCK_CHAT_RESPONSE;
-  }
-
-  if (API_URL) {
-    const context = relevantScreenshots.map(s => ({
-      id: s.id,
-      summary: s.summary,
-      ocrText: s.ocrText,
-      entities: s.entities,
-    }));
-    const res = await fetch(`${API_URL}/api/ask`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question, context }),
-    });
-    if (!res.ok) throw new Error(`Backend ask failed: ${res.status}`);
-    return await res.json();
   }
 
   const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
