@@ -131,8 +131,7 @@ export default function App() {
           .from('screenshots')
           .select('*')
           .or(`userId.eq.${user.id},user_id.eq.${user.id}`)
-          .order('createdAt', { ascending: false });
-        
+          .order('upload_date', { ascending: false });
         
         if (data && !error) {
           const mappedData = data.map(mapDbToScreenshot);
@@ -220,13 +219,15 @@ export default function App() {
           const { data: dbData, error: dbError } = await supabase
             .from('screenshots')
             .insert([{
-              ...dbDataToInsert,
-              imageUrl,
-              userId: user.id,
-              user_id: user.id, // Support both formats
-              storage_path: fileName,
-              storagePath: fileName
-            }])
+            ...dbDataToInsert,
+            imageUrl,
+            userId: user.id,
+            user_id: user.id,
+            upload_date: new Date().toISOString(),
+            createdAt: new Date().toISOString(),
+            storage_path: fileName,
+            storagePath: fileName
+          }])
             .select()
             .single();
 
