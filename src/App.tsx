@@ -102,7 +102,7 @@ export default function App() {
             event: '*',
             schema: 'public',
             table: 'screenshots',
-            filter: `userId=eq.${user.id}`
+            filter: `user_id=eq.${user.id}`
           },
           (payload) => {
             console.log("Real-time event received:", payload.eventType, (payload.new as any)?.id);
@@ -130,7 +130,7 @@ export default function App() {
         const { data, error } = await supabase
           .from('screenshots')
           .select('*')
-          .eq('userId', user.id)
+          .or(`userId.eq.${user.id},user_id.eq.${user.id}`)
           .order('createdAt', { ascending: false });
         
         
@@ -223,6 +223,8 @@ export default function App() {
               ...dbDataToInsert,
               imageUrl,
               userId: user.id,
+              user_id: user.id, // Support both formats
+              storage_path: fileName,
               storagePath: fileName
             }])
             .select()
