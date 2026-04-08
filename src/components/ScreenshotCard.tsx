@@ -41,9 +41,9 @@ export const ScreenshotCard: React.FC<ScreenshotCardProps> = ({
         />
         
         {!screenshot.isAnalyzed && (
-          <div className="absolute inset-0 bg-ink/40 backdrop-blur-sm flex items-center justify-center">
-            <div className="scan-line" />
-            <span className="mono-label text-accent animate-pulse">Analyzing</span>
+          <div className="absolute inset-0 bg-ink/60 backdrop-blur-md flex flex-col items-center justify-center gap-3">
+            <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+            <span className="mono-label text-accent animate-pulse">Awaiting Intelligence...</span>
           </div>
         )}
 

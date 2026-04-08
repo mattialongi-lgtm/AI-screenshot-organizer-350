@@ -15,7 +15,12 @@ interface UploadDropzoneProps {
 
 export const UploadDropzone: React.FC<UploadDropzoneProps> = ({ onUpload, isUploading }) => {
   const onDrop = useCallback((acceptedFiles: File[]) => {
-    onUpload(acceptedFiles);
+    if (acceptedFiles.length > 40) {
+      alert("Batch limit exceeded: You can only upload a maximum of 40 screenshots at once. Processing the first 40.");
+      onUpload(acceptedFiles.slice(0, 40));
+    } else {
+      onUpload(acceptedFiles);
+    }
   }, [onUpload]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({

@@ -50,6 +50,7 @@ import { SourcesPage } from './pages/Sources';
 import { Cloud } from 'lucide-react';
 
 import { mapDbToScreenshot, mapScreenshotToDb } from './lib/mapping';
+import { LandingPage } from './pages/LandingPage';
 
 export default function App() {
   const [currentPage, setCurrentPage] = useState<'home' | 'sources'>('home');
@@ -136,7 +137,7 @@ export default function App() {
       const fetchCloudScreenshots = async () => {
         const { data, error } = await supabase
           .from('screenshots')
-          .select('*')
+          .select('*, tags(*)')
           .eq('user_id', user.id)
           .order('upload_date', { ascending: false });
         
@@ -206,8 +207,9 @@ export default function App() {
 
       try {
         if (user && isSupabaseConfigured) {
-          // Upload to Storage
-          const fileName = `${user.id}/${Date.now()}_${file.name}`;
+          // Sanitize filename for Supabase Storage (removes spaces, special characters)
+          const safeFilename = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+          const fileName = `${user.id}/${Date.now()}_${safeFilename}`;
           const { data: uploadData, error: uploadError } = await supabase.storage
             .from('screenshots')
             .upload(fileName, blob);
@@ -245,8 +247,9 @@ export default function App() {
         console.log("Starting analysis for:", newScreenshot.id);
         // Start analysis
         processAnalysis(newScreenshot);
-      } catch (err) {
+      } catch (err: any) {
         console.error("Upload failed:", err);
+        alert(`Upload Error: ${err.message || JSON.stringify(err)}`);
       }
     }
     setIsUploading(false);
@@ -306,7 +309,6 @@ export default function App() {
           category: updated.category,
           summary: updated.summary,
           ocr_text: updated.ocrText,
-          tags: updated.tags,
           entities: updated.entities,
           embedding: updated.embedding,
           is_sensitive: updated.isSensitive ? 1 : 0,
@@ -323,13 +325,20 @@ export default function App() {
           console.error("DEBUG: Supabase update error:", dbError);
         } else {
           console.log("DEBUG: Supabase update success for:", updated.id);
+          if (updated.tags && updated.tags.length > 0) {
+            // Delete old tags first just in case
+            await supabase.from('tags').delete().eq('screenshot_id', updated.id);
+            const tagInserts = updated.tags.map(t => ({ screenshot_id: updated.id, tag: t }));
+            await supabase.from('tags').insert(tagInserts);
+          }
         }
       } else {
         console.log("DEBUG: Updating local DB for:", updated.id);
         await updateScreenshot(updated);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("DEBUG: processAnalysis FAILED for screenshot:", screenshot.id, err);
+      alert(`Analysis Error: ${err.message || JSON.stringify(err)}`);
       const failed = { ...screenshot, isAnalyzed: false, summary: "Analysis failed. See console for details." };
       setScreenshots(prev => prev.map(s => String(s.id) === String(failed.id) ? failed : s));
     }
@@ -410,6 +419,18 @@ export default function App() {
     const relevant = await semanticSearch(text, screenshots);
     return await askScreenshots(text, relevant.slice(0, 5));
   };
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-ink flex items-center justify-center">
+        <Loader2 className="w-12 h-12 text-accent animate-spin" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <LandingPage />;
+  }
 
   return (
     <div className="min-h-screen bg-ink text-bone font-sans selection:bg-accent selection:text-ink transition-colors duration-700">
@@ -494,13 +515,11 @@ export default function App() {
               <section className="p-8 border border-accent/20 bg-accent/[0.02] relative overflow-hidden group">
                 <div className="absolute top-0 right-0 w-24 h-24 bg-accent/5 -mr-12 -mt-12 rotate-45 group-hover:scale-150 transition-transform duration-700" />
                 <h4 className="font-serif italic text-xl mb-4 flex items-center gap-2">
-                  {user ? <Sparkles className="w-5 h-5 text-accent" /> : <Database className="w-5 h-5 text-accent" />}
-                  {user ? 'Cloud Active' : 'Local Vault'}
+                  <Sparkles className="w-5 h-5 text-accent" />
+                  Cloud Active
                 </h4>
                 <p className="text-xs text-muted leading-relaxed font-light">
-                  {user 
-                    ? 'Your intelligence archive is securely synced across all nodes via Firestore.' 
-                    : "Operating in local-only mode. Sign in to enable cross-device synchronization."}
+                  Your intelligence archive is securely synced across all nodes via Supabase.
                 </p>
               </section>
             </aside>
