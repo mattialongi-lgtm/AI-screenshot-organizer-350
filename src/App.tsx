@@ -28,6 +28,7 @@ import {
 } from './lib/db';
 import { 
   analyzeScreenshot, 
+  analyzeStoredScreenshot,
   generateEmbedding, 
   askScreenshots, 
   isMockMode 
@@ -282,6 +283,32 @@ export default function App() {
 
     try {
       console.log("DEBUG: processAnalysis started for:", screenshot.id);
+
+      if (user && isSupabaseConfigured && screenshot.id) {
+        console.log("DEBUG: Using backend stored analysis for:", screenshot.id);
+        const result = await analyzeStoredScreenshot(screenshot.id);
+        const updated: ScreenshotMetadata = {
+          ...screenshot,
+          category: result.category,
+          summary: result.summary,
+          ocrText: result.ocr_text,
+          tags: result.tags,
+          entities: result.entities,
+          isSensitive: result.safety?.contains_sensitive ?? false,
+          safetyReason: result.safety?.reason ?? '',
+          embedding: result.embedding ?? screenshot.embedding,
+          isAnalyzed: true,
+          lastAnalyzedAt: Date.now()
+        };
+
+        if (result.saveWarnings && result.saveWarnings.length > 0) {
+          console.warn("DEBUG: Backend analysis saved with warnings:", result.saveWarnings);
+        }
+
+        setScreenshots(prev => prev.map(s => String(s.id) === String(updated.id) ? updated : s));
+        return;
+      }
+
       let blob = screenshot.imageBlob;
       if (!blob && screenshot.imageUrl) {
         console.log("DEBUG: Fetching blob from URL:", screenshot.imageUrl);

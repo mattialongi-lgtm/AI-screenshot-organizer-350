@@ -5,7 +5,7 @@ import path from "path";
 import multer from "multer";
 import { createClient, type User } from "@supabase/supabase-js";
 import fs from "fs";
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 import { fileURLToPath } from "url";
 import crypto from "crypto";
 
@@ -55,6 +55,20 @@ const configuredGoogleRedirectUri = normalizeUrl(process.env.GOOGLE_OAUTH_REDIRE
 const oauthStateSecret = process.env.GOOGLE_OAUTH_STATE_SECRET || supabaseServiceRoleKey;
 const tokenEncryptionSecret = process.env.GOOGLE_TOKEN_ENCRYPTION_KEY || supabaseServiceRoleKey;
 const geminiApiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
+const geminiApiKeySource = process.env.GEMINI_API_KEY
+  ? "GEMINI_API_KEY"
+  : process.env.VITE_GEMINI_API_KEY
+    ? "VITE_GEMINI_API_KEY"
+    : null;
+const GEMINI_ANALYSIS_MODEL = process.env.GEMINI_ANALYSIS_MODEL || "gemini-2.5-flash";
+const GEMINI_EMBEDDING_MODEL = process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-2-preview";
+const OPTIONAL_ANALYSIS_COLUMNS = new Set([
+  "embedding",
+  "entities",
+  "is_sensitive",
+  "safety_reason",
+  "last_analyzed_at",
+]);
 const GOOGLE_DRIVE_SCOPES = [
   "https://www.googleapis.com/auth/drive.readonly",
   "openid",
@@ -83,6 +97,28 @@ type OAuthStatePayload = {
   exp: number;
   redirectUri: string;
   userId: string;
+};
+
+type ScreenshotEntities = {
+  dates: string[];
+  amounts: string[];
+  emails: string[];
+  urls: string[];
+  phones: string[];
+  order_ids: string[];
+  merchant?: string;
+};
+
+type ScreenshotAnalysisResult = {
+  category: string;
+  summary: string;
+  ocr_text: string;
+  tags: string[];
+  entities: ScreenshotEntities;
+  safety: {
+    contains_sensitive: boolean;
+    reason: string;
+  };
 };
 
 const clients = new Map<WebSocket, string>();
@@ -148,10 +184,164 @@ function createGoogleOAuthClient(redirectUri?: string | null) {
 
 function requireGeminiApiKey() {
   if (!geminiApiKey) {
-    throw new Error("Missing GEMINI_API_KEY server environment variable.");
+    throw new Error("Missing Gemini API key. Set GEMINI_API_KEY on the backend runtime.");
   }
 
   return geminiApiKey;
+}
+
+function createRequestId() {
+  return crypto.randomUUID().slice(0, 8);
+}
+
+function redactUserId(userId?: string | null) {
+  if (!userId) return null;
+  return `${userId.slice(0, 8)}...`;
+}
+
+function serializeError(error: unknown) {
+  if (error instanceof Error) {
+    const err = error as Error & {
+      status?: number;
+      code?: string;
+      details?: unknown;
+      hint?: unknown;
+      cause?: unknown;
+    };
+
+    return {
+      name: err.name,
+      message: err.message,
+      status: err.status ?? null,
+      code: err.code ?? null,
+      details: err.details ?? null,
+      hint: err.hint ?? null,
+      cause: err.cause instanceof Error ? err.cause.message : err.cause ?? null,
+      stack: err.stack ?? null,
+    };
+  }
+
+  return { value: error };
+}
+
+function logRouteInfo(route: string, requestId: string, details: Record<string, unknown>) {
+  console.log(`[${route}] ${JSON.stringify({ requestId, ...details })}`);
+}
+
+function logRouteWarn(route: string, requestId: string, details: Record<string, unknown>) {
+  console.warn(`[${route}] ${JSON.stringify({ requestId, ...details })}`);
+}
+
+function logRouteError(
+  route: string,
+  requestId: string,
+  req: Request | null,
+  error: unknown,
+  details: Record<string, unknown> = {},
+) {
+  console.error(
+    `[${route}] ${JSON.stringify({
+      requestId,
+      userId: redactUserId(req?.user?.id),
+      ...details,
+      error: serializeError(error),
+    })}`,
+  );
+}
+
+function buildAnalysisPrompt() {
+  return `Analyze this screenshot and return a JSON object with the following schema:
+{
+  "category": "Chat" | "Receipt" | "Social Media" | "Email" | "Document" | "Meme" | "Banking" | "E-commerce" | "Booking" | "Other",
+  "summary": "1-2 line summary",
+  "ocr_text": "full extracted text",
+  "tags": ["tag1", "tag2", ...],
+  "entities": {
+    "dates": [],
+    "amounts": [],
+    "emails": [],
+    "urls": [],
+    "phones": [],
+    "order_ids": [],
+    "merchant": ""
+  },
+  "safety": { "contains_sensitive": true/false, "reason": "" }
+}`;
+}
+
+function normalizeStringArray(value: unknown) {
+  if (!Array.isArray(value)) return [];
+
+  return [...new Set(
+    value
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => entry.trim())
+      .filter(Boolean),
+  )];
+}
+
+function normalizeAnalysisResult(raw: any): ScreenshotAnalysisResult {
+  const allowedCategories = new Set([
+    "Chat",
+    "Receipt",
+    "Social Media",
+    "Email",
+    "Document",
+    "Meme",
+    "Banking",
+    "E-commerce",
+    "Booking",
+    "Other",
+  ]);
+
+  const category = typeof raw?.category === "string" && allowedCategories.has(raw.category)
+    ? raw.category
+    : "Other";
+  const summary = typeof raw?.summary === "string" ? raw.summary.trim() : "";
+  const ocr_text = typeof raw?.ocr_text === "string" ? raw.ocr_text : "";
+  const tags = normalizeStringArray(raw?.tags);
+  const entities = {
+    dates: normalizeStringArray(raw?.entities?.dates),
+    amounts: normalizeStringArray(raw?.entities?.amounts),
+    emails: normalizeStringArray(raw?.entities?.emails),
+    urls: normalizeStringArray(raw?.entities?.urls),
+    phones: normalizeStringArray(raw?.entities?.phones),
+    order_ids: normalizeStringArray(raw?.entities?.order_ids),
+    merchant: typeof raw?.entities?.merchant === "string" ? raw.entities.merchant.trim() : "",
+  } satisfies ScreenshotEntities;
+
+  return {
+    category,
+    summary,
+    ocr_text,
+    tags,
+    entities,
+    safety: {
+      contains_sensitive: Boolean(raw?.safety?.contains_sensitive),
+      reason: typeof raw?.safety?.reason === "string" ? raw.safety.reason.trim() : "",
+    },
+  };
+}
+
+function normalizeAnalyzeMimeType(mimeType?: string | null) {
+  const normalized = mimeType?.trim().toLowerCase();
+  if (!normalized) return "image/png";
+  return normalized.startsWith("image/") ? normalized : "image/png";
+}
+
+function decodeBase64Image(base64Image: string) {
+  const trimmed = base64Image.trim();
+  if (!trimmed) {
+    throw new Error("Image payload is empty.");
+  }
+
+  const normalized = trimmed.replace(/^data:[^;]+;base64,/i, "").replace(/\s+/g, "");
+  const buffer = Buffer.from(normalized, "base64");
+  if (!buffer.length) {
+    throw new Error("Decoded image buffer is empty.");
+  }
+
+  return { base64: normalized, buffer };
 }
 
 function getTokenEncryptionKey() {
@@ -600,12 +790,12 @@ app.post("/api/icloud/import", requireAuth, upload.single("file"), async (req, r
         category: analysis.category,
         summary: analysis.summary,
         ocr_text: analysis.ocr_text,
-        tags: analysis.tags, // Supabase handles JSON arrays directly if column is jsonb/text[]
         entities: analysis.entities,
-        language: analysis.language,
         embedding: embedding,
         is_sensitive: analysis.safety?.contains_sensitive ? 1 : 0,
         is_analyzed: 1,
+        safety_reason: analysis.safety?.reason || "",
+        last_analyzed_at: new Date().toISOString(),
         source_id: 'icloud_folder',
         external_id: localPath,
         upload_date: modifiedTime || new Date().toISOString(),
@@ -617,6 +807,7 @@ app.post("/api/icloud/import", requireAuth, upload.single("file"), async (req, r
       console.error("Supabase insert error (iCloud):", dbError);
       throw dbError;
     }
+    await replaceScreenshotTagsBestEffort("/api/icloud/import", dbData.id, analysis.tags);
     console.log("Supabase insert success (iCloud):", dbData.id);
 
     const newScreenshot = buildRealtimeScreenshotPayload({
@@ -642,35 +833,17 @@ async function analyzeScreenshot(buffer: Buffer, mimeType = "image/png") {
   const imageData = buffer.toString("base64");
 
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+    model: GEMINI_ANALYSIS_MODEL,
     contents: [
       {
         parts: [
           {
             inlineData: {
-              mimeType,
+              mimeType: normalizeAnalyzeMimeType(mimeType),
               data: imageData,
             },
           },
-          {
-            text: `Analyze this screenshot and return a JSON object with the following schema:
-            {
-              "category": "Chat" | "Receipt" | "Social Media" | "Email" | "Document" | "Meme" | "Banking" | "E-commerce" | "Booking" | "Other",
-              "summary": "1-2 line summary",
-              "ocr_text": "full extracted text",
-              "tags": ["tag1", "tag2", ...],
-              "entities": {
-                "dates": [],
-                "amounts": [],
-                "emails": [],
-                "urls": [],
-                "phones": [],
-                "order_ids": [],
-                "merchant": ""
-              },
-              "safety": { "contains_sensitive": true/false, "reason": "" }
-            }`,
-          },
+          { text: buildAnalysisPrompt() },
         ],
       },
     ],
@@ -692,24 +865,27 @@ async function analyzeScreenshot(buffer: Buffer, mimeType = "image/png") {
     text = res.response.text;
   }
 
-  if (!text) throw new Error("Empty response from AI");
-
-  try {
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    return JSON.parse(jsonMatch ? jsonMatch[0] : text);
-  } catch (e) {
-    console.error("JSON Parse Error in server.ts:", e, "Raw text:", text);
-    throw new Error("Invalid format from AI");
-  }
+  return normalizeAnalysisResult(parseJsonResponse(text));
 }
 
 async function generateEmbedding(text: string) {
+  const normalizedText = text.trim();
+  if (!normalizedText) {
+    return [];
+  }
+
   const ai = new GoogleGenAI({ apiKey: requireGeminiApiKey() });
   const result = await ai.models.embedContent({
-    model: "gemini-embedding-2-preview",
-    contents: [{ parts: [{ text }] }],
+    model: GEMINI_EMBEDDING_MODEL,
+    contents: [{ parts: [{ text: normalizedText }] }],
   });
-  return (result as any).embeddings[0].values || (result as any).embedding.values;
+
+  const values = (result as any).embeddings?.[0]?.values || (result as any).embedding?.values;
+  if (!Array.isArray(values) || values.length === 0) {
+    throw new Error("Empty embedding response from AI");
+  }
+
+  return values;
 }
 
 // Frontend-facing AI proxy endpoints (used when frontend sets VITE_API_URL)
@@ -732,60 +908,261 @@ function parseJsonResponse(text: string) {
   }
 }
 
-app.post("/api/analyze", requireAuth, async (req, res) => {
-  try {
-    const { image, mimeType } = req.body;
-    if (!image) return res.status(400).json({ error: "No image data" });
+async function downloadScreenshotFromStorage(storagePath: string) {
+  const { data, error } = await supabase.storage
+    .from("screenshots")
+    .download(storagePath);
 
-    const ai = new GoogleGenAI({ apiKey: requireGeminiApiKey() });
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: [
-        {
-          parts: [
-            { inlineData: { mimeType: mimeType || "image/png", data: image } },
-            {
-              text: `Analyze this screenshot and return a JSON object with the following schema:
-              {
-                "category": "Chat" | "Receipt" | "Social Media" | "Email" | "Document" | "Meme" | "Banking" | "E-commerce" | "Booking" | "Other",
-                "summary": "1-2 line summary",
-                "ocr_text": "full extracted text",
-                "tags": ["tag1", "tag2", ...],
-                "entities": {
-                  "dates": [],
-                  "amounts": [],
-                  "emails": [],
-                  "urls": [],
-                  "phones": [],
-                  "order_ids": [],
-                  "merchant": ""
-                },
-                "safety": { "contains_sensitive": true/false, "reason": "" }
-              }`,
-            },
-          ],
-        },
-      ],
-      config: { responseMimeType: "application/json" },
+  if (error || !data) {
+    throw error || new Error(`Failed to download screenshots/${storagePath}`);
+  }
+
+  const buffer = Buffer.from(await data.arrayBuffer());
+  if (!buffer.length) {
+    throw new Error(`Downloaded screenshots/${storagePath} but the file was empty.`);
+  }
+
+  return buffer;
+}
+
+async function replaceScreenshotTags(screenshotId: string, tags: string[]) {
+  const normalizedTags = normalizeStringArray(tags);
+
+  const { error: deleteError } = await supabase
+    .from("tags")
+    .delete()
+    .eq("screenshot_id", screenshotId);
+
+  if (deleteError) {
+    throw deleteError;
+  }
+
+  if (normalizedTags.length === 0) {
+    return normalizedTags;
+  }
+
+  const { error: insertError } = await supabase
+    .from("tags")
+    .insert(normalizedTags.map((tag) => ({ screenshot_id: screenshotId, tag })));
+
+  if (insertError) {
+    throw insertError;
+  }
+
+  return normalizedTags;
+}
+
+async function replaceScreenshotTagsBestEffort(route: string, screenshotId: string, tags: string[]) {
+  try {
+    await replaceScreenshotTags(screenshotId, tags);
+  } catch (error) {
+    logRouteError(route, "n/a", null, error, {
+      stage: "tags-warning",
+      screenshotId,
+      warning: "Analysis row saved, but tag rows did not persist.",
+    });
+  }
+}
+
+function buildAnalysisUpdatePayload(analysis: ScreenshotAnalysisResult, embedding: number[]) {
+  return {
+    category: analysis.category,
+    summary: analysis.summary,
+    ocr_text: analysis.ocr_text,
+    entities: analysis.entities,
+    embedding,
+    is_sensitive: analysis.safety.contains_sensitive ? 1 : 0,
+    is_analyzed: 1,
+    safety_reason: analysis.safety.reason || "",
+    last_analyzed_at: new Date().toISOString(),
+  };
+}
+
+function extractMissingColumn(error: any) {
+  const combined = [error?.message, error?.details, error?.hint]
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .join(" ");
+
+  const match = combined.match(/'([a-zA-Z0-9_]+)' column/);
+  return match?.[1] ?? null;
+}
+
+async function persistAnalysisForScreenshot(params: {
+  requestId: string;
+  route: string;
+  screenshotId: string;
+  userId: string;
+  analysis: ScreenshotAnalysisResult;
+  embedding: number[];
+}) {
+  const { analysis, embedding, requestId, route, screenshotId, userId } = params;
+  const warnings: string[] = [];
+  const updatePayload: Record<string, any> = buildAnalysisUpdatePayload(analysis, embedding);
+
+  while (true) {
+    const { error } = await supabase
+      .from("screenshots")
+      .update(updatePayload)
+      .eq("id", screenshotId)
+      .eq("user_id", userId);
+
+    if (!error) {
+      break;
+    }
+
+    const missingColumn = extractMissingColumn(error);
+    if (missingColumn && OPTIONAL_ANALYSIS_COLUMNS.has(missingColumn) && missingColumn in updatePayload) {
+      delete updatePayload[missingColumn];
+      const warning = `screenshots.${missingColumn} is missing in production; skipped persisting it.`;
+      warnings.push(warning);
+      logRouteWarn(route, requestId, {
+        stage: "db-update-warning",
+        screenshotId,
+        warning,
+      });
+      continue;
+    }
+
+    throw error;
+  }
+
+  try {
+    await replaceScreenshotTags(screenshotId, analysis.tags);
+  } catch (tagError) {
+    const warning = "Failed to persist tags rows; analysis row saved without tag records.";
+    warnings.push(warning);
+    logRouteError(route, requestId, null, tagError, {
+      stage: "tags-warning",
+      screenshotId,
+      warning,
+    });
+  }
+
+  return { warnings, persistedColumns: Object.keys(updatePayload) };
+}
+
+app.post("/api/analyze", requireAuth, async (req, res) => {
+  const requestId = createRequestId();
+  const startedAt = Date.now();
+
+  try {
+    if (!req.user) {
+      return res.status(401).json({ error: "Authentication required", requestId });
+    }
+
+    const { image, mimeType, screenshotId } = req.body ?? {};
+    const normalizedMimeType = normalizeAnalyzeMimeType(mimeType);
+    let buffer: Buffer;
+    let storagePath: string | null = null;
+
+    if (screenshotId) {
+      const { data: screenshot, error: screenshotError } = await supabase
+        .from("screenshots")
+        .select("id, storage_path, filename")
+        .eq("id", screenshotId)
+        .eq("user_id", req.user.id)
+        .maybeSingle();
+
+      if (screenshotError) {
+        throw screenshotError;
+      }
+
+      if (!screenshot) {
+        return res.status(404).json({ error: "Screenshot not found", requestId });
+      }
+
+      storagePath = screenshot.storage_path || screenshot.filename;
+      if (!storagePath) {
+        return res.status(400).json({ error: "Screenshot is missing storage_path", requestId });
+      }
+
+      buffer = await downloadScreenshotFromStorage(storagePath);
+    } else {
+      if (!image || typeof image !== "string") {
+        return res.status(400).json({ error: "No image data", requestId });
+      }
+
+      const decodedImage = decodeBase64Image(image);
+      buffer = decodedImage.buffer;
+    }
+
+    logRouteInfo("/api/analyze", requestId, {
+      stage: "start",
+      userId: redactUserId(req.user.id),
+      screenshotId: screenshotId ?? null,
+      storagePath,
+      mimeType: normalizedMimeType,
+      imageBytes: buffer.length,
+      geminiApiKeySource,
+      analysisModel: GEMINI_ANALYSIS_MODEL,
     });
 
-    const text = await extractResponseText(response);
-    res.json(parseJsonResponse(text));
+    const analysis = await analyzeScreenshot(buffer, normalizedMimeType);
+    let embedding: number[] | undefined;
+    let saveWarnings: string[] = [];
+
+    if (screenshotId) {
+      embedding = await generateEmbedding(`${analysis.summary} ${analysis.ocr_text}`.trim());
+      const persistence = await persistAnalysisForScreenshot({
+        requestId,
+        route: "/api/analyze",
+        screenshotId: String(screenshotId),
+        userId: req.user.id,
+        analysis,
+        embedding,
+      });
+      saveWarnings = persistence.warnings;
+    }
+
+    logRouteInfo("/api/analyze", requestId, {
+      stage: "success",
+      userId: redactUserId(req.user.id),
+      screenshotId: screenshotId ?? null,
+      storagePath,
+      durationMs: Date.now() - startedAt,
+      category: analysis.category,
+      tagCount: analysis.tags.length,
+      ocrChars: analysis.ocr_text.length,
+      embeddingLength: embedding?.length ?? null,
+      saveWarnings,
+    });
+
+    res.json({
+      requestId,
+      ...analysis,
+      ...(embedding ? { embedding } : {}),
+      ...(screenshotId ? { screenshotId, saveWarnings } : {}),
+    });
   } catch (error) {
-    console.error("Analyze error:", error);
-    res.status(500).json({ error: "Analysis failed" });
+    logRouteError("/api/analyze", requestId, req, error, {
+      stage: "failed",
+      durationMs: Date.now() - startedAt,
+      screenshotId: req.body?.screenshotId ?? null,
+      hasImage: typeof req.body?.image === "string",
+      imageLength: typeof req.body?.image === "string" ? req.body.image.length : null,
+      mimeType: normalizeAnalyzeMimeType(req.body?.mimeType),
+      geminiApiKeySource,
+      analysisModel: GEMINI_ANALYSIS_MODEL,
+    });
+    res.status(500).json({ error: "Analysis failed", requestId });
   }
 });
 
 app.post("/api/embed", requireAuth, async (req, res) => {
+  const requestId = createRequestId();
   try {
     const { text } = req.body;
-    if (!text) return res.status(400).json({ error: "No text provided" });
+    if (!text) return res.status(400).json({ error: "No text provided", requestId });
     const embedding = await generateEmbedding(text);
-    res.json({ embedding });
+    res.json({ embedding, requestId });
   } catch (error) {
-    console.error("Embed error:", error);
-    res.status(500).json({ error: "Embedding failed" });
+    logRouteError("/api/embed", requestId, req, error, {
+      stage: "failed",
+      textLength: typeof req.body?.text === "string" ? req.body.text.length : null,
+      embeddingModel: GEMINI_EMBEDDING_MODEL,
+      geminiApiKeySource,
+    });
+    res.status(500).json({ error: "Embedding failed", requestId });
   }
 });
 
@@ -1126,12 +1503,12 @@ app.post("/api/sync", requireAuth, async (req, res) => {
                 category: analysis.category,
                 summary: analysis.summary,
                 ocr_text: analysis.ocr_text,
-                tags: analysis.tags,
                 entities: analysis.entities,
-                language: analysis.language,
                 embedding: embedding,
                 is_sensitive: analysis.safety?.contains_sensitive ? 1 : 0,
                 is_analyzed: 1,
+                safety_reason: analysis.safety?.reason || "",
+                last_analyzed_at: new Date().toISOString(),
                 source_id: source.id,
                 external_id: file.id,
                 upload_date: file.modifiedTime || new Date().toISOString(),
@@ -1142,6 +1519,7 @@ app.post("/api/sync", requireAuth, async (req, res) => {
             if (insError || !insertedScreenshot) {
               throw insError || new Error("Google Drive screenshot insert returned no row.");
             }
+            await replaceScreenshotTagsBestEffort("/api/sync", insertedScreenshot.id, analysis.tags);
             console.log("Supabase insert success (Google Drive):", insertedScreenshot.id);
 
             sourceSynced++;
@@ -1207,12 +1585,12 @@ app.post("/api/upload", requireAuth, upload.single("screenshot"), async (req, re
         category: analysis.category,
         summary: analysis.summary,
         ocr_text: analysis.ocr_text,
-        tags: analysis.tags,
         entities: analysis.entities,
-        language: analysis.language,
         embedding: embedding,
         is_sensitive: analysis.safety?.contains_sensitive ? 1 : 0,
         is_analyzed: 1,
+        safety_reason: analysis.safety?.reason || "",
+        last_analyzed_at: new Date().toISOString(),
         upload_date: new Date().toISOString(),
       }])
       .select()
@@ -1222,6 +1600,7 @@ app.post("/api/upload", requireAuth, upload.single("screenshot"), async (req, re
       console.error("Supabase insert error (Upload):", error);
       throw error;
     }
+    await replaceScreenshotTagsBestEffort("/api/upload", data.id, analysis.tags);
     console.log("Supabase insert success (Upload):", data.id);
     res.json({ id: data.id, ...analysis });
   } catch (error) {
@@ -1333,6 +1712,16 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   }
+
+  console.log(`[startup] ${JSON.stringify({
+    nodeEnv: process.env.NODE_ENV || "development",
+    port: PORT,
+    supabaseConfigured: Boolean(supabaseUrl && supabaseServiceRoleKey),
+    geminiConfigured: Boolean(geminiApiKey),
+    geminiApiKeySource,
+    analysisModel: GEMINI_ANALYSIS_MODEL,
+    embeddingModel: GEMINI_EMBEDDING_MODEL,
+  })}`);
 
   server.listen({ port: PORT, host: "0.0.0.0" }, () => {
     console.log(`Server running on http://localhost:${PORT}`);
