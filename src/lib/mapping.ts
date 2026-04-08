@@ -4,21 +4,36 @@
  */
 
 import { ScreenshotMetadata, Category } from '../types';
+import { buildApiUrl } from './api';
+
+const encodeStoragePath = (storagePath: string) =>
+  storagePath
+    .split('/')
+    .map(segment => encodeURIComponent(segment))
+    .join('/');
 
 export const mapDbToScreenshot = (dbData: any): ScreenshotMetadata => {
   const userId = dbData.userId || dbData.user_id;
-  const filename = dbData.filename || dbData.original_name;
+  const storagePath = dbData.storagePath || dbData.storage_path || dbData.filename;
+  const filename = storagePath || dbData.original_name;
+  const source =
+    dbData.source === 'googleDrive' || dbData.source === 'google_drive' || String(dbData.source_id || '').startsWith('google_drive:')
+      ? 'googleDrive'
+      : dbData.source === 'icloudFolder' || dbData.source === 'icloud_folder' || dbData.source_id === 'icloud_folder'
+        ? 'icloudFolder'
+        : (dbData.source || 'upload');
   
   // Reconstruct imageUrl from storage path if not directly provided
   let imageUrl = dbData.imageUrl || dbData.image_url;
-  if (!imageUrl && userId && filename) {
+  if (!imageUrl && storagePath) {
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
     if (supabaseUrl) {
-      // Filename usually contains the folder structure in our new implementation
-      // formats: "user_id/filename" or just "filename"
-      const path = filename.includes('/') ? filename : `${userId}/${filename}`;
-      imageUrl = `${supabaseUrl}/storage/v1/object/public/screenshots/${path}`;
+      imageUrl = `${supabaseUrl}/storage/v1/object/public/screenshots/${encodeStoragePath(storagePath)}`;
     }
+  }
+
+  if (!imageUrl && filename && !String(filename).includes('/')) {
+    imageUrl = buildApiUrl(`/uploads/${encodeURIComponent(String(filename))}`);
   }
 
   return {
@@ -32,7 +47,7 @@ export const mapDbToScreenshot = (dbData: any): ScreenshotMetadata => {
     tags: Array.isArray(dbData.tags) ? dbData.tags.map((t: any) => typeof t === 'string' ? t : t.tag) : [],
     entities: dbData.entities || { dates: [], amounts: [], emails: [], urls: [], phones: [], order_ids: [] },
     embedding: dbData.embedding,
-    source: dbData.source || 'upload',
+    source,
     imageUrl,
     isAnalyzed: !!(
       dbData.is_analyzed === 1 || 
@@ -61,6 +76,7 @@ export const mapScreenshotToDb = (screenshot: ScreenshotMetadata): any => {
     is_sensitive: screenshot.isSensitive ? 1 : 0,
     is_analyzed: screenshot.isAnalyzed ? 1 : 0,
     user_id: screenshot.userId,
+    storage_path: screenshot.filename,
     upload_date: new Date(screenshot.createdAt).toISOString(),
     safety_reason: screenshot.safetyReason,
     last_analyzed_at: screenshot.lastAnalyzedAt ? new Date(screenshot.lastAnalyzedAt).toISOString() : null,

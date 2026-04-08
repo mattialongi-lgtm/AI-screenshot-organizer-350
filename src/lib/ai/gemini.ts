@@ -5,6 +5,7 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 import { AnalysisResult, Category, ChatResponse, ScreenshotMetadata } from "../../types";
+import { authenticatedFetch } from "../supabase";
 
 const GEMINI_API_KEY = (import.meta as any).env.VITE_GEMINI_API_KEY;
 const API_URL = (import.meta as any).env.VITE_API_URL;
@@ -47,7 +48,7 @@ export const analyzeScreenshot = async (imageBlob: Blob): Promise<AnalysisResult
   if (API_URL) {
     console.log("DEBUG: Using backend API at", API_URL);
     const base64Image = await blobToBase64(imageBlob);
-    const res = await fetch(`${API_URL}/api/analyze`, {
+    const res = await authenticatedFetch(`${API_URL}/api/analyze`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ image: base64Image.split(',')[1], mimeType: imageBlob.type }),
@@ -136,7 +137,7 @@ export const generateEmbedding = async (text: string): Promise<number[]> => {
   }
 
   if (API_URL) {
-    const res = await fetch(`${API_URL}/api/embed`, {
+    const res = await authenticatedFetch(`${API_URL}/api/embed`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),
@@ -177,7 +178,7 @@ export const askScreenshots = async (
       ocrText: s.ocrText,
       entities: s.entities,
     }));
-    const res = await fetch(`${API_URL}/api/ask`, {
+    const res = await authenticatedFetch(`${API_URL}/api/ask`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ question, context }),

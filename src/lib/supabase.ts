@@ -1,5 +1,6 @@
 import { createClient, User } from '@supabase/supabase-js';
 import { useState, useEffect } from 'react';
+import { buildApiUrl } from './api';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -32,6 +33,34 @@ export const useSupabaseAuth = () => {
   }, []);
 
   return { user, loading };
+};
+
+export const getAccessToken = async () => {
+  const { data, error } = await supabase.auth.getSession();
+  if (error) throw error;
+  return data.session?.access_token ?? null;
+};
+
+export const authenticatedFetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
+  const token = await getAccessToken();
+  if (!token) {
+    throw new Error("No authenticated Supabase session found.");
+  }
+
+  const headers = new Headers(init.headers ?? {});
+  headers.set("Authorization", `Bearer ${token}`);
+
+  const requestUrl =
+    typeof input === 'string'
+      ? buildApiUrl(input)
+      : input instanceof URL
+        ? new URL(buildApiUrl(input.toString()))
+        : input;
+
+  return fetch(requestUrl, {
+    ...init,
+    headers,
+  });
 };
 
 export const signInWithGoogle = async () => {

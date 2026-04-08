@@ -17,6 +17,8 @@ import {
 import { motion } from 'motion/react';
 import { CloudSource, SourceSettings } from '../types';
 import { getAllSources, saveSource, deleteSource } from '../lib/db';
+import { authenticatedFetch } from '../lib/supabase';
+import { getApiOrigin } from '../lib/api';
 
 interface SourcesPageProps {
   onBack: () => void;
@@ -35,7 +37,7 @@ export const SourcesPage: React.FC<SourcesPageProps> = ({ onBack }) => {
   const loadSources = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/sources');
+      const res = await authenticatedFetch('/api/sources');
       const cloudSources = await res.json();
       
       // Merge with local sources if any (though we primarily use server for sources now)
@@ -48,8 +50,13 @@ export const SourcesPage: React.FC<SourcesPageProps> = ({ onBack }) => {
   };
 
   const handleConnectGoogle = () => {
-    fetch('/api/auth/google/url')
-      .then(res => res.json())
+    authenticatedFetch('/api/auth/google/url')
+      .then(async (res) => {
+        if (!res.ok) {
+          throw new Error(await res.text());
+        }
+        return res.json();
+      })
       .then(data => {
         const width = 600;
         const height = 700;
@@ -62,18 +69,36 @@ export const SourcesPage: React.FC<SourcesPageProps> = ({ onBack }) => {
           `width=${width},height=${height},left=${left},top=${top}`
         );
 
-        window.addEventListener('message', (event) => {
-          if (event.data.type === 'AUTH_SUCCESS') {
-            loadSources();
+        if (!popup) {
+          throw new Error('Google auth popup was blocked by the browser.');
+        }
+
+        const handleMessage = (event: MessageEvent) => {
+          if (event.origin !== getApiOrigin()) {
+            return;
           }
-        }, { once: true });
+
+          if (event.data.type === 'AUTH_SUCCESS') {
+            window.removeEventListener('message', handleMessage);
+            loadSources();
+          } else if (event.data.type === 'AUTH_ERROR') {
+            window.removeEventListener('message', handleMessage);
+            alert(event.data.message || 'Google Drive connection failed.');
+          }
+        };
+
+        window.addEventListener('message', handleMessage);
+      })
+      .catch((error) => {
+        console.error("Google connection failed:", error);
+        alert(error.message || 'Google Drive connection failed.');
       });
   };
 
   const handleDisconnect = async (id: string) => {
     if (!confirm('Are you sure you want to disconnect this source?')) return;
     try {
-      await fetch(`/api/sources/${id}/disconnect`, { method: 'POST' });
+      await authenticatedFetch(`/api/sources/${id}/disconnect`, { method: 'POST' });
       loadSources();
     } catch (err) {
       console.error("Disconnect failed:", err);
@@ -83,7 +108,11 @@ export const SourcesPage: React.FC<SourcesPageProps> = ({ onBack }) => {
   const handleSync = async (id: string) => {
     setSyncing(id);
     try {
-      const res = await fetch('/api/sync', { method: 'POST' });
+      const res = await authenticatedFetch('/api/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sourceId: id }),
+      });
       const data = await res.json();
       if (data.success) {
         alert(`Sync complete! Imported ${data.syncedCount} new screenshots.`);
@@ -97,7 +126,7 @@ export const SourcesPage: React.FC<SourcesPageProps> = ({ onBack }) => {
   };
 
   const copyAgentCommand = () => {
-    const cmd = 'npm run agent -- "/path/to/your/icloud/screenshots"';
+    const cmd = '$env:SUPABASE_JWT="<your-access-token>"; npm run agent -- "/path/to/your/icloud/screenshots"';
     navigator.clipboard.writeText(cmd);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -130,7 +159,7 @@ export const SourcesPage: React.FC<SourcesPageProps> = ({ onBack }) => {
           onConnect={handleConnectGoogle}
           onDisconnect={(id) => handleDisconnect(id)}
           onSync={(id) => handleSync(id)}
-          isSyncing={syncing === 'googleDrive'}
+          isSyncing={syncing === sources.find(s => s.provider === 'googleDrive')?.id}
         />
 
         {/* iCloud Folder Card */}
@@ -163,7 +192,7 @@ export const SourcesPage: React.FC<SourcesPageProps> = ({ onBack }) => {
             <div className="space-y-3">
               <label className="mono-label text-[9px]">Agent Command</label>
               <div className="flex items-center gap-4 p-4 bg-ink border border-white/10 font-mono text-[11px] text-bone overflow-hidden group">
-                <span className="truncate opacity-70 group-hover:opacity-100 transition-opacity">npm run agent -- "/path/to/icloud"</span>
+                <span className="truncate opacity-70 group-hover:opacity-100 transition-opacity">$env:SUPABASE_JWT="..."; npm run agent -- "/path/to/icloud"</span>
                 <button 
                   onClick={copyAgentCommand}
                   className="shrink-0 text-muted hover:text-accent transition-colors"

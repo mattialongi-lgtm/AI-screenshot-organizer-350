@@ -10,12 +10,17 @@ const __dirname = path.dirname(__filename);
 // Configuration
 const API_URL = process.env.API_URL || 'http://localhost:3000';
 const WS_URL = process.env.WS_URL || 'ws://localhost:3000';
+const AUTH_TOKEN = process.env.SUPABASE_JWT || process.env.AUTH_TOKEN;
 const WATCH_PATH = process.argv[2] || process.env.WATCH_PATH;
 
 if (!WATCH_PATH) {
   console.error('Error: Please provide a path to watch.');
   console.log('Usage: node agent/index.js "/path/to/icloud/screenshots"');
   process.exit(1);
+}
+
+if (!AUTH_TOKEN) {
+  console.warn('Warning: set SUPABASE_JWT or AUTH_TOKEN before starting the agent.');
 }
 
 console.log(`🚀 iCloud Sync Agent starting...`);
@@ -31,6 +36,11 @@ const watcher = chokidar.watch(WATCH_PATH, {
 
 async function uploadFile(filePath) {
   try {
+    if (!AUTH_TOKEN) {
+      console.error('Cannot upload without SUPABASE_JWT or AUTH_TOKEN.');
+      return;
+    }
+
     const stats = fs.statSync(filePath);
     if (stats.isDirectory()) return;
 
@@ -57,6 +67,9 @@ async function uploadFile(filePath) {
 
     const response = await fetch(`${API_URL}/api/icloud/import`, {
       method: 'POST',
+      headers: {
+        Authorization: `Bearer ${AUTH_TOKEN}`,
+      },
       body: formData,
     });
 
@@ -80,7 +93,13 @@ watcher.on('add', (filePath) => uploadFile(filePath));
 // Keep-alive WebSocket connection to show status in UI
 let ws;
 function connectWS() {
-  ws = new WebSocket(WS_URL);
+  if (!AUTH_TOKEN) {
+    return;
+  }
+
+  const wsUrl = new URL(WS_URL);
+  wsUrl.searchParams.set('token', AUTH_TOKEN);
+  ws = new WebSocket(wsUrl);
 
   ws.on('open', () => {
     console.log('📡 Connected to app server');

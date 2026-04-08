@@ -44,13 +44,14 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-import { supabase, isSupabaseConfigured, useSupabaseAuth } from './lib/supabase';
+import { supabase, isSupabaseConfigured, useSupabaseAuth, getAccessToken } from './lib/supabase';
 import { AuthButton } from './components/AuthButton';
 import { SourcesPage } from './pages/Sources';
 import { Cloud } from 'lucide-react';
 
 import { mapDbToScreenshot, mapScreenshotToDb } from './lib/mapping';
 import { LandingPage } from './pages/LandingPage';
+import { buildWebSocketUrl } from './lib/api';
 
 export default function App() {
   const [currentPage, setCurrentPage] = useState<'home' | 'sources'>('home');
@@ -70,34 +71,49 @@ export default function App() {
 
   // Connect to WebSocket for real-time analysis updates
   useEffect(() => {
-    const getWsUrl = () => {
-      const apiUrl = import.meta.env.VITE_API_URL;
-      if (apiUrl) {
-        return apiUrl.replace('http', 'ws');
+    let ws: WebSocket | null = null;
+    let cancelled = false;
+
+    const getWsUrl = async () => {
+      const token = await getAccessToken();
+      if (!token) {
+        return null;
       }
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      return `${protocol}//${window.location.host}`;
+
+      return buildWebSocketUrl(token);
     };
 
-    const ws = new WebSocket(getWsUrl());
+    const connect = async () => {
+      const wsUrl = await getWsUrl();
+      if (!wsUrl || cancelled) {
+        return;
+      }
 
-    ws.onmessage = (event) => {
-      try {
-        const message = JSON.parse(event.data);
-        if (message.type === 'icloud:newFile' || message.type === 'google:newFile') {
-          const newScreenshot = message.data;
-          setScreenshots(prev => {
-            if (prev.some(s => s.id === newScreenshot.id)) return prev;
-            return [newScreenshot, ...prev];
-          });
+      ws = new WebSocket(wsUrl);
+
+      ws.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          if (message.type === 'icloud:newFile' || message.type === 'google:newFile') {
+            const newScreenshot = message.data;
+            setScreenshots(prev => {
+              if (prev.some(s => s.id === newScreenshot.id)) return prev;
+              return [newScreenshot, ...prev];
+            });
+          }
+        } catch (e) {
+          console.error("WS message error:", e);
         }
-      } catch (e) {
-        console.error("WS message error:", e);
-      }
+      };
     };
 
-    return () => ws.close();
-  }, []);
+    connect();
+
+    return () => {
+      cancelled = true;
+      ws?.close();
+    };
+  }, [user?.id]);
 
   // Load data from IndexedDB or Supabase
   useEffect(() => {
@@ -224,10 +240,13 @@ export default function App() {
           const { data: dbData, error: dbError } = await supabase
             .from('screenshots')
             .insert([{
-            ...dbDataToInsert,
-            user_id: user.id,
-            upload_date: new Date().toISOString()
-          }])
+              ...dbDataToInsert,
+              filename: fileName,
+              storage_path: fileName,
+              original_name: file.name,
+              user_id: user.id,
+              upload_date: new Date().toISOString()
+            }])
             .select()
             .single();
 
@@ -319,7 +338,8 @@ export default function App() {
         const { error: dbError } = await supabase
           .from('screenshots')
           .update(analysisUpdate)
-          .eq('id', updated.id);
+          .eq('id', updated.id)
+          .eq('user_id', user.id);
         
         if (dbError) {
           console.error("DEBUG: Supabase update error:", dbError);
@@ -352,12 +372,17 @@ export default function App() {
           .from('screenshots')
           .select('storage_path')
           .eq('id', id)
+          .eq('user_id', user.id)
           .single();
 
         if (data?.storage_path) {
           await supabase.storage.from('screenshots').remove([data.storage_path]);
         }
-        await supabase.from('screenshots').delete().eq('id', id);
+        await supabase
+          .from('screenshots')
+          .delete()
+          .eq('id', id)
+          .eq('user_id', user.id);
       } else {
         await deleteScreenshot(id as number);
         setScreenshots(prev => prev.filter(s => s.id !== id));
@@ -615,7 +640,8 @@ export default function App() {
               await supabase
                 .from('screenshots')
                 .update(dbUpdate)
-                .eq('id', id);
+                .eq('id', id)
+                .eq('user_id', user.id);
             } else {
               await updateScreenshot(updated);
               setScreenshots(prev => prev.map(sc => sc.id === id ? updated : sc));
