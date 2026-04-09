@@ -19,7 +19,7 @@ export const mapDbToScreenshot = (dbData: any): ScreenshotMetadata => {
   const source =
     dbData.source === 'googleDrive' || dbData.source === 'google_drive' || String(dbData.source_id || '').startsWith('google_drive:')
       ? 'googleDrive'
-      : dbData.source === 'icloudFolder' || dbData.source === 'icloud_folder' || dbData.source_id === 'icloud_folder'
+      : dbData.source === 'icloudFolder' || dbData.source === 'icloud_folder' || String(dbData.source_id || '').startsWith('icloud_folder')
         ? 'icloudFolder'
         : (dbData.source || 'upload');
   

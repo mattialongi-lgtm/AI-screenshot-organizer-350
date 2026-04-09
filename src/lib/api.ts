@@ -23,6 +23,10 @@ export const getApiOrigin = () => {
   return window.location.origin;
 };
 
+export const getApiBaseUrl = () => {
+  return API_BASE_URL || window.location.origin;
+};
+
 export const buildWebSocketUrl = (token: string) => {
   const baseUrl = API_BASE_URL
     ? new URL(API_BASE_URL)

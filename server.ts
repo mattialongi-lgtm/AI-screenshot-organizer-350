@@ -54,6 +54,10 @@ const configuredApiPublicUrl = normalizeUrl(process.env.API_PUBLIC_URL);
 const configuredGoogleRedirectUri = normalizeUrl(process.env.GOOGLE_OAUTH_REDIRECT_URI);
 const oauthStateSecret = process.env.GOOGLE_OAUTH_STATE_SECRET || supabaseServiceRoleKey;
 const tokenEncryptionSecret = process.env.GOOGLE_TOKEN_ENCRYPTION_KEY || supabaseServiceRoleKey;
+const agentTokenSecret = process.env.AGENT_TOKEN_SECRET || oauthStateSecret;
+const agentTokenTtlDays = Number(process.env.AGENT_TOKEN_TTL_DAYS) > 0
+  ? Number(process.env.AGENT_TOKEN_TTL_DAYS)
+  : 90;
 const geminiApiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
 const geminiApiKeySource = process.env.GEMINI_API_KEY
   ? "GEMINI_API_KEY"
@@ -82,15 +86,24 @@ const DEFAULT_SOURCE_SETTINGS = {
   autoSyncEnabled: false,
   intervalMinutes: 15,
 } as const;
+const GOOGLE_SOURCE_TYPE = "google_drive";
+const ICLOUD_SOURCE_TYPE = "icloud_folder";
 
 declare global {
   namespace Express {
     interface Request {
       accessToken?: string;
+      authType?: "agent" | "supabase";
       user?: User;
     }
   }
 }
+
+type AgentTokenPayload = {
+  exp: number;
+  source: typeof ICLOUD_SOURCE_TYPE;
+  userId: string;
+};
 
 type OAuthStatePayload = {
   appOrigin?: string | null;
@@ -121,7 +134,14 @@ type ScreenshotAnalysisResult = {
   };
 };
 
-const clients = new Map<WebSocket, string>();
+type ConnectedClient = {
+  authType: "agent" | "supabase";
+  path?: string;
+  role: "agent" | "client";
+  userId: string;
+};
+
+const clients = new Map<WebSocket, ConnectedClient>();
 
 function normalizeUrl(value?: string | null) {
   if (!value) return null;
@@ -452,6 +472,28 @@ function parseSourceSettings(settings: any) {
   };
 }
 
+function buildICloudSourceId(userId: string) {
+  return `${ICLOUD_SOURCE_TYPE}:${userId}`;
+}
+
+function isICloudSourceId(value?: string | null) {
+  return typeof value === "string" && value.startsWith(`${ICLOUD_SOURCE_TYPE}:`);
+}
+
+function mapSourceTypeToProvider(type?: string | null) {
+  if (type === GOOGLE_SOURCE_TYPE) return "googleDrive";
+  if (type === ICLOUD_SOURCE_TYPE) return "icloudFolder";
+  return type ?? "upload";
+}
+
+function getICloudAgentStatus(userId: string) {
+  return [...clients.values()].some(
+    (client) => client.userId === userId && client.role === "agent",
+  )
+    ? "online"
+    : "offline";
+}
+
 function buildRealtimeScreenshotPayload(row: any) {
   const storagePath = row.storage_path || row.filename;
 
@@ -473,9 +515,9 @@ function buildRealtimeScreenshotPayload(row: any) {
       order_ids: [],
     },
     source:
-      row.source === "google_drive"
+      row.source === GOOGLE_SOURCE_TYPE
         ? "googleDrive"
-        : row.source === "icloud_folder" || row.source_id === "icloud_folder"
+        : row.source === ICLOUD_SOURCE_TYPE || row.source_id === ICLOUD_SOURCE_TYPE || isICloudSourceId(row.source_id)
           ? "icloudFolder"
           : "upload",
     imageUrl: getPublicStorageUrl(storagePath),
@@ -483,6 +525,21 @@ function buildRealtimeScreenshotPayload(row: any) {
     isSensitive: !!(row.is_sensitive === 1 || row.is_sensitive === true),
     safetyReason: row.safety_reason || "",
     embedding: row.embedding,
+  };
+}
+
+function serializeCloudSource(row: any, userId: string) {
+  const provider = mapSourceTypeToProvider(row.type);
+  return {
+    id: row.id,
+    provider,
+    status: row.status === "error" ? "error" : row.status === "connected" ? "connected" : "disconnected",
+    connectedAt: row.connected_at ? new Date(row.connected_at).getTime() : undefined,
+    lastSyncAt: row.last_sync ? new Date(row.last_sync).getTime() : undefined,
+    accountEmail: row.email || undefined,
+    localPath: row.local_path || undefined,
+    agentStatus: provider === "icloudFolder" ? getICloudAgentStatus(userId) : undefined,
+    settings: parseSourceSettings(row.settings),
   };
 }
 
@@ -568,6 +625,97 @@ async function createGoogleDriveAuth(source: any, userId: string) {
   return auth;
 }
 
+async function ensureICloudSource(
+  userId: string,
+  options: {
+    connectedAt?: string;
+    lastSync?: string;
+    localPath?: string | null;
+    status?: "connected" | "error";
+  } = {},
+) {
+  const nowIso = new Date().toISOString();
+  const payload: Record<string, unknown> = {
+    id: buildICloudSourceId(userId),
+    user_id: userId,
+    type: ICLOUD_SOURCE_TYPE,
+    status: options.status ?? "connected",
+    connected_at: options.connectedAt ?? nowIso,
+  };
+
+  if (typeof options.localPath === "string" && options.localPath.trim()) {
+    payload.local_path = options.localPath.trim();
+  }
+
+  if (options.lastSync) {
+    payload.last_sync = options.lastSync;
+  }
+
+  const { error } = await supabase
+    .from("cloud_sources")
+    .upsert(payload, { onConflict: "id" });
+
+  if (error) {
+    console.error("Failed to upsert iCloud source:", error);
+  }
+}
+
+function buildAgentToken(userId: string) {
+  const payload = Buffer.from(JSON.stringify({
+    exp: Date.now() + agentTokenTtlDays * 24 * 60 * 60 * 1000,
+    source: ICLOUD_SOURCE_TYPE,
+    userId,
+  } satisfies AgentTokenPayload)).toString("base64url");
+  const signature = crypto
+    .createHmac("sha256", agentTokenSecret)
+    .update(payload)
+    .digest("base64url");
+
+  return `agent:v1:${payload}.${signature}`;
+}
+
+function verifyAgentToken(token: string | null) {
+  if (!token?.startsWith("agent:v1:")) {
+    return null;
+  }
+
+  const unsignedToken = token.slice("agent:v1:".length);
+  const [payload, signature] = unsignedToken.split(".");
+  if (!payload || !signature) {
+    return null;
+  }
+
+  const expectedSignature = crypto
+    .createHmac("sha256", agentTokenSecret)
+    .update(payload)
+    .digest("base64url");
+
+  const providedBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expectedSignature);
+  if (
+    providedBuffer.length !== expectedBuffer.length ||
+    !crypto.timingSafeEqual(providedBuffer, expectedBuffer)
+  ) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as AgentTokenPayload;
+    if (
+      !parsed.userId ||
+      parsed.source !== ICLOUD_SOURCE_TYPE ||
+      parsed.exp < Date.now()
+    ) {
+      return null;
+    }
+
+    return parsed;
+  } catch (error) {
+    console.error("Invalid agent token payload:", error);
+    return null;
+  }
+}
+
 function buildOAuthState(userId: string, redirectUri: string, appOrigin?: string | null) {
   const payload = Buffer.from(JSON.stringify({
     appOrigin: appOrigin || null,
@@ -625,6 +773,27 @@ function getBearerToken(req: Request) {
   return token.trim();
 }
 
+async function authenticateRequestToken(token: string) {
+  const agentPayload = verifyAgentToken(token);
+  if (agentPayload) {
+    return {
+      authType: "agent" as const,
+      user: { id: agentPayload.userId } as User,
+    };
+  }
+
+  const { data, error } = await supabase.auth.getUser(token);
+  if (error || !data.user) {
+    return null;
+  }
+
+  return {
+    accessToken: token,
+    authType: "supabase" as const,
+    user: data.user,
+  };
+}
+
 async function requireAuth(req: Request, res: Response, next: NextFunction) {
   try {
     const token = getBearerToken(req);
@@ -632,18 +801,31 @@ async function requireAuth(req: Request, res: Response, next: NextFunction) {
       return res.status(401).json({ error: "Missing bearer token" });
     }
 
-    const { data, error } = await supabase.auth.getUser(token);
-    if (error || !data.user) {
+    const authenticated = await authenticateRequestToken(token);
+    if (!authenticated?.user) {
       return res.status(401).json({ error: "Invalid or expired token" });
     }
 
-    req.accessToken = token;
-    req.user = data.user;
+    if (authenticated.authType === "agent" && req.path !== "/api/icloud/import") {
+      return res.status(403).json({ error: "This token can only be used by the iCloud sync agent." });
+    }
+
+    req.accessToken = authenticated.accessToken;
+    req.authType = authenticated.authType;
+    req.user = authenticated.user;
     next();
   } catch (error) {
     console.error("Auth middleware error:", error);
     return res.status(401).json({ error: "Authentication failed" });
   }
+}
+
+function requireSupabaseAuth(req: Request, res: Response, next: NextFunction) {
+  if (req.authType !== "supabase") {
+    return res.status(403).json({ error: "Interactive authentication is required for this action." });
+  }
+
+  next();
 }
 
 async function getOwnedSource(sourceId: string, userId: string) {
@@ -660,8 +842,8 @@ async function getOwnedSource(sourceId: string, userId: string) {
 
 function broadcastToUser(userId: string, data: any) {
   const message = JSON.stringify(data);
-  clients.forEach((clientUserId, client) => {
-    if (clientUserId === userId && client.readyState === WebSocket.OPEN) {
+  clients.forEach((clientInfo, client) => {
+    if (clientInfo.userId === userId && client.readyState === WebSocket.OPEN) {
       client.send(message);
     }
   });
@@ -676,14 +858,68 @@ wss.on("connection", async (ws, req) => {
       return;
     }
 
-    const { data, error } = await supabase.auth.getUser(token);
-    if (error || !data.user) {
+    const authenticated = await authenticateRequestToken(token);
+    if (!authenticated?.user) {
       ws.close(1008, "Invalid token");
       return;
     }
 
-    clients.set(ws, data.user.id);
-    ws.on("close", () => clients.delete(ws));
+    clients.set(ws, {
+      authType: authenticated.authType,
+      role: "client",
+      userId: authenticated.user.id,
+    });
+
+    ws.on("message", async (rawMessage) => {
+      try {
+        const parsed = JSON.parse(rawMessage.toString());
+        if (parsed?.type !== "agent:status") {
+          return;
+        }
+
+        const currentClient = clients.get(ws);
+        if (!currentClient) {
+          return;
+        }
+
+        const normalizedPath = typeof parsed.path === "string" && parsed.path.trim()
+          ? parsed.path.trim()
+          : undefined;
+
+        if (parsed.status === "offline") {
+          clients.set(ws, {
+            ...currentClient,
+            path: normalizedPath,
+            role: "client",
+          });
+          broadcastToUser(currentClient.userId, { type: "source:updated" });
+          return;
+        }
+
+        clients.set(ws, {
+          ...currentClient,
+          path: normalizedPath,
+          role: "agent",
+        });
+
+        await ensureICloudSource(currentClient.userId, {
+          localPath: normalizedPath,
+          status: "connected",
+        });
+        broadcastToUser(currentClient.userId, { type: "source:updated" });
+      } catch (error) {
+        console.error("WebSocket message error:", error);
+      }
+    });
+
+    ws.on("close", () => {
+      const disconnectedClient = clients.get(ws);
+      clients.delete(ws);
+
+      if (disconnectedClient?.role === "agent") {
+        broadcastToUser(disconnectedClient.userId, { type: "source:updated" });
+      }
+    });
   } catch (error) {
     console.error("WebSocket auth failed:", error);
     ws.close(1011, "Authentication failed");
@@ -754,18 +990,31 @@ app.post("/api/icloud/import", requireAuth, upload.single("file"), async (req, r
     if (!req.user) return res.status(401).json({ error: "Authentication required" });
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
     const { localPath, modifiedTime } = req.body;
+    const normalizedLocalPath = typeof localPath === "string" ? localPath.trim() : "";
+    const externalId = normalizedLocalPath || `icloud:${req.file.originalname}:${modifiedTime || req.file.filename}`;
+    const sourceId = buildICloudSourceId(req.user.id);
 
     // Check if already exists
     const { data: existingScreenshots } = await supabase
       .from('screenshots')
       .select('id')
-      .eq('external_id', localPath)
+      .eq('external_id', externalId)
       .eq('user_id', req.user.id);
 
     if (existingScreenshots && existingScreenshots.length > 0) {
       fs.unlinkSync(req.file.path);
+      await ensureICloudSource(req.user.id, {
+        lastSync: new Date().toISOString(),
+        localPath: normalizedLocalPath || null,
+        status: "connected",
+      });
       return res.json({ success: true, skipped: true });
     }
+
+    await ensureICloudSource(req.user.id, {
+      localPath: normalizedLocalPath || null,
+      status: "connected",
+    });
 
     const buffer = fs.readFileSync(req.file.path);
     const storagePath = await uploadBufferToStorage(
@@ -796,8 +1045,8 @@ app.post("/api/icloud/import", requireAuth, upload.single("file"), async (req, r
         is_analyzed: 1,
         safety_reason: analysis.safety?.reason || "",
         last_analyzed_at: new Date().toISOString(),
-        source_id: 'icloud_folder',
-        external_id: localPath,
+        source_id: sourceId,
+        external_id: externalId,
         upload_date: modifiedTime || new Date().toISOString(),
       }])
       .select()
@@ -809,10 +1058,15 @@ app.post("/api/icloud/import", requireAuth, upload.single("file"), async (req, r
     }
     await replaceScreenshotTagsBestEffort("/api/icloud/import", dbData.id, analysis.tags);
     console.log("Supabase insert success (iCloud):", dbData.id);
+    await ensureICloudSource(req.user.id, {
+      lastSync: new Date().toISOString(),
+      localPath: normalizedLocalPath || null,
+      status: "connected",
+    });
 
     const newScreenshot = buildRealtimeScreenshotPayload({
       ...dbData,
-      source_id: 'icloud_folder',
+      source_id: sourceId,
     });
 
     broadcastToUser(req.user.id, { type: 'icloud:newFile', data: newScreenshot });
@@ -1320,6 +1574,24 @@ app.get("/api/auth/google/callback", async (req, res) => {
   }
 });
 
+app.post("/api/icloud/agent-token", requireAuth, requireSupabaseAuth, async (req, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    await ensureICloudSource(req.user.id, { status: "connected" });
+
+    res.json({
+      expiresAt: Date.now() + agentTokenTtlDays * 24 * 60 * 60 * 1000,
+      token: buildAgentToken(req.user.id),
+    });
+  } catch (error) {
+    console.error("Failed to create iCloud agent token:", error);
+    res.status(500).json({ error: "Failed to create iCloud agent token." });
+  }
+});
+
 app.get("/api/sources", requireAuth, async (req, res) => {
   if (!req.user) return res.status(401).json({ error: "Authentication required" });
 
@@ -1330,11 +1602,7 @@ app.get("/api/sources", requireAuth, async (req, res) => {
 
   if (error) return res.status(500).json({ error: error.message });
 
-  res.json(sources.map((s: any) => ({
-    ...s,
-    provider: s.type === 'google_drive' ? 'googleDrive' : s.type,
-    settings: parseSourceSettings(s.settings)
-  })));
+  res.json(sources.map((source: any) => serializeCloudSource(source, req.user!.id)));
 });
 
 app.post("/api/sources/:id/settings", requireAuth, async (req, res) => {
@@ -1412,20 +1680,21 @@ app.post("/api/sync", requireAuth, async (req, res) => {
   for (const source of sources as any) {
     const settings = parseSourceSettings(source.settings);
 
-    if (source.type === "google_drive") {
+    if (source.type === GOOGLE_SOURCE_TYPE) {
       try {
         const auth = await createGoogleDriveAuth(source, req.user.id);
         const drive = google.drive({ version: "v3", auth });
 
-        // Build query to restrict to screenshots
         const dateLimit = new Date();
         dateLimit.setDate(dateLimit.getDate() - settings.dateRangeDays);
         const rfc3339Date = dateLimit.toISOString();
         const maxFiles = Math.min(Math.max(settings.maxFiles, 1), 500);
-        const filenameKeywordClauses = settings.keywords.map((keyword: string) => `name contains '${escapeDriveQueryValue(keyword)}'`);
+        const filenameKeywordClauses = settings.keywords
+          .map((keyword: string) => keyword.trim())
+          .filter(Boolean)
+          .map((keyword: string) => `name contains '${escapeDriveQueryValue(keyword)}'`);
 
-        // Query for folders named "Screenshots"
-        let folderQuery = "mimeType = 'application/vnd.google-apps.folder' and trashed = false and (name contains 'Screenshot' or name contains 'screenshot')";
+        const folderQuery = "mimeType = 'application/vnd.google-apps.folder' and trashed = false and (name contains 'Screenshot' or name contains 'screenshot')";
         let folderResponse;
         try {
           folderResponse = await drive.files.list({
@@ -1440,27 +1709,46 @@ app.post("/api/sync", requireAuth, async (req, res) => {
         }
 
         const folders = folderResponse?.data?.files || [];
-
-        let q = `trashed = false and mimeType contains 'image/' and modifiedTime > '${rfc3339Date}'`;
+        const discoveryClauses: string[] = [];
 
         if (folders.length > 0) {
-          // If screenshot folders exist, restrict to those folders
-          const parentQueries = folders.map((f) => `'${f.id}' in parents`).join(" or ");
-          q += ` and (${parentQueries})`;
-        } else if (filenameKeywordClauses.length > 0) {
-          q += ` and (${filenameKeywordClauses.join(" or ")})`;
+          const parentQueries = folders
+            .filter((folder) => folder.id)
+            .map((folder) => `'${folder.id}' in parents`);
+
+          if (parentQueries.length > 0) {
+            discoveryClauses.push(`(${parentQueries.join(" or ")})`);
+          }
         }
 
-        const response = await drive.files.list({
-          q,
-          fields: "files(id, name, mimeType, modifiedTime, webViewLink)",
-          pageSize: maxFiles,
-          orderBy: "modifiedTime desc",
-          includeItemsFromAllDrives: true,
-          supportsAllDrives: true,
-          spaces: "drive",
-        });
-        const files = response.data.files || [];
+        if (filenameKeywordClauses.length > 0) {
+          discoveryClauses.push(`(${filenameKeywordClauses.join(" or ")})`);
+        }
+
+        let q = `trashed = false and (mimeType contains 'image/' or mimeType = 'application/octet-stream') and modifiedTime > '${rfc3339Date}'`;
+
+        if (discoveryClauses.length > 0) {
+          q += ` and (${discoveryClauses.join(" or ")})`;
+        }
+
+        const files: any[] = [];
+        let pageToken: string | undefined;
+        do {
+          const response = await drive.files.list({
+            q,
+            fields: "nextPageToken, files(id, name, mimeType, modifiedTime, webViewLink)",
+            pageSize: Math.min(100, maxFiles - files.length),
+            pageToken,
+            orderBy: "modifiedTime desc",
+            includeItemsFromAllDrives: true,
+            supportsAllDrives: true,
+            spaces: "drive",
+          });
+
+          files.push(...(response.data.files || []));
+          pageToken = response.data.nextPageToken ?? undefined;
+        } while (pageToken && files.length < maxFiles);
+
         let sourceSynced = 0;
         let sourceSkipped = 0;
         let sourceErrors = 0;
@@ -1530,7 +1818,7 @@ app.post("/api/sync", requireAuth, async (req, res) => {
               type: 'google:newFile',
               data: buildRealtimeScreenshotPayload({
                 ...insertedScreenshot,
-                source: 'google_drive',
+                source: GOOGLE_SOURCE_TYPE,
               })
             });
           } catch (err) {
@@ -1553,7 +1841,10 @@ app.post("/api/sync", requireAuth, async (req, res) => {
     }
   }
 
-  res.json({ success: true, syncedCount: totalSynced, results });
+  const hasSourceFailure = results.some((result) => Boolean(result.error));
+  res
+    .status(hasSourceFailure && totalSynced === 0 ? 502 : 200)
+    .json({ success: !hasSourceFailure, syncedCount: totalSynced, results });
 });
 
 // API Routes

@@ -39,7 +39,7 @@ export interface CloudSource {
   id: string;
   provider: SourceProvider;
   status: 'connected' | 'disconnected' | 'error';
-  connectedAt: number;
+  connectedAt?: number;
   lastSyncAt?: number;
   accountEmail?: string;
   localPath?: string;
