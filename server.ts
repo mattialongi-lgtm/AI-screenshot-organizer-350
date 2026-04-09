@@ -47,6 +47,21 @@ const wss = new WebSocketServer({ server });
 const PORT = process.env.PORT || 3000;
 app.set("trust proxy", true);
 
+server.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EADDRINUSE") {
+    console.error(`[server] Port ${PORT} is already in use. Stop the previous process and retry.`);
+    process.exit(1);
+  }
+  console.error("[server] HTTP server error:", err);
+});
+
+wss.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EADDRINUSE") {
+    return; // already handled by server error above
+  }
+  console.error("[server] WebSocket server error:", err);
+});
+
 const googleClientId = process.env.GOOGLE_CLIENT_ID;
 const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
 const configuredFrontendAppUrl = normalizeUrl(process.env.APP_URL);
