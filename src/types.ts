@@ -89,3 +89,9 @@ export interface ChatResponse {
   answer: string;
   used_ids: (string | number)[];
 }
+
+export interface ChatMessage {
+  role: 'user' | 'ai';
+  text: string;
+  ids?: (string | number)[];
+}

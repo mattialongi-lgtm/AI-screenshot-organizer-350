@@ -1172,6 +1172,83 @@ function parseJsonResponse(text: string) {
   }
 }
 
+type AskContextItem = {
+  id?: string | number | null;
+  category?: string | null;
+  summary?: string | null;
+  ocrText?: string | null;
+  ocr_text?: string | null;
+  tags?: unknown;
+  entities?: unknown;
+};
+
+type AskHistoryItem = {
+  role?: string | null;
+  text?: string | null;
+};
+
+function buildAskContextText(context: unknown) {
+  if (typeof context === "string") {
+    return context.trim();
+  }
+
+  if (!Array.isArray(context)) {
+    return "";
+  }
+
+  return context
+    .filter((item): item is AskContextItem => Boolean(item) && typeof item === "object")
+    .map((item) => {
+      const id = typeof item.id === "string" || typeof item.id === "number" ? item.id : null;
+      const category = typeof item.category === "string" ? item.category.trim() : "";
+      const summary = typeof item.summary === "string" ? item.summary.trim() : "";
+      const ocrText = typeof item.ocrText === "string"
+        ? item.ocrText
+        : typeof item.ocr_text === "string"
+          ? item.ocr_text
+          : "";
+      const tags = normalizeStringArray(item.tags);
+      const entities = item.entities && typeof item.entities === "object"
+        ? JSON.stringify(item.entities)
+        : "{}";
+
+      return [
+        id !== null ? `ID: ${id}` : null,
+        category ? `Category: ${category}` : null,
+        summary ? `Summary: ${summary}` : null,
+        ocrText ? `OCR Text: ${ocrText}` : null,
+        tags.length > 0 ? `Tags: ${tags.join(", ")}` : null,
+        `Entities: ${entities}`,
+      ]
+        .filter((line): line is string => Boolean(line))
+        .join("\n");
+    })
+    .filter(Boolean)
+    .join("\n---\n");
+}
+
+function buildAskHistoryText(history: unknown) {
+  if (!Array.isArray(history)) {
+    return "";
+  }
+
+  return history
+    .filter((item): item is AskHistoryItem => Boolean(item) && typeof item === "object")
+    .map((item) => {
+      const role = item.role === "ai" ? "Assistant" : item.role === "user" ? "User" : null;
+      const text = typeof item.text === "string" ? item.text.trim() : "";
+
+      if (!role || !text) {
+        return null;
+      }
+
+      return `${role}: ${text}`;
+    })
+    .filter((line): line is string => Boolean(line))
+    .slice(-8)
+    .join("\n");
+}
+
 async function downloadScreenshotFromStorage(storagePath: string) {
   const { data, error } = await supabase.storage
     .from("screenshots")
@@ -1431,24 +1508,43 @@ app.post("/api/embed", requireAuth, async (req, res) => {
 });
 
 app.post("/api/ask", requireAuth, async (req, res) => {
-  try {
-    const { question, context } = req.body;
-    if (!question) return res.status(400).json({ error: "No question provided" });
+  const requestId = createRequestId();
+  const startedAt = Date.now();
 
-    const contextText = (context || []).map((s: any) =>
-      `ID: ${s.id}\nSummary: ${s.summary}\nOCR Text: ${s.ocrText}\nEntities: ${JSON.stringify(s.entities)}`
-    ).join("\n---\n");
+  try {
+    if (!req.user) {
+      return res.status(401).json({ error: "Authentication required", requestId });
+    }
+
+    const { question, context, history } = req.body;
+    if (!question) {
+      return res.status(400).json({ error: "No question provided", requestId });
+    }
+
+    const contextText = buildAskContextText(context);
+    const historyText = buildAskHistoryText(history);
+
+    logRouteInfo("/api/ask", requestId, {
+      stage: "start",
+      userId: redactUserId(req.user.id),
+      questionLength: typeof question === "string" ? question.length : null,
+      contextLength: contextText.length,
+      contextItems: Array.isArray(context) ? context.length : null,
+      historyItems: Array.isArray(history) ? history.length : null,
+      chatModel: OPENAI_CHAT_MODEL,
+      openaiApiKeySource,
+    });
 
     const response = await getOpenAIClient().chat.completions.create({
       model: OPENAI_CHAT_MODEL,
       messages: [
         {
           role: "system",
-          content: "You are an AI assistant helping a user with their screenshots. Answer using only the provided context. If the answer is not present, say you don't know.",
+          content: "You are an AI assistant helping a user with their screenshots. Use the provided screenshot context and recent conversation when answering. If screenshot context is missing, say that clearly and briefly explain why instead of inventing details.",
         },
         {
           role: "user",
-          content: `Return valid JSON matching the required schema.\n\nContext:\n${contextText || "(no context provided)"}\n\nQuestion: ${question}`,
+          content: `Return valid JSON matching the required schema.\n\nScreenshot Context:\n${contextText || "(no context provided)"}\n\nRecent Conversation:\n${historyText || "(no prior conversation)"}\n\nCurrent Question: ${question}`,
         },
       ],
       response_format: {
@@ -1462,15 +1558,34 @@ app.post("/api/ask", requireAuth, async (req, res) => {
     });
 
     const parsed = parseJsonResponse(extractChatCompletionText(response));
-    res.json({
+    const payload = {
       answer: typeof parsed?.answer === "string" ? parsed.answer : "",
       used_ids: Array.isArray(parsed?.used_ids)
         ? parsed.used_ids.filter((value: unknown): value is string | number => typeof value === "string" || typeof value === "number")
         : [],
+      requestId,
+    };
+
+    logRouteInfo("/api/ask", requestId, {
+      stage: "success",
+      userId: redactUserId(req.user.id),
+      durationMs: Date.now() - startedAt,
+      answerLength: payload.answer.length,
+      usedIdsCount: payload.used_ids.length,
     });
+
+    res.json(payload);
   } catch (error) {
-    console.error("Ask error:", error);
-    res.status(500).json({ error: "Ask failed" });
+    logRouteError("/api/ask", requestId, req, error, {
+      stage: "failed",
+      durationMs: Date.now() - startedAt,
+      questionLength: typeof req.body?.question === "string" ? req.body.question.length : null,
+      contextType: Array.isArray(req.body?.context) ? "array" : typeof req.body?.context,
+      historyItems: Array.isArray(req.body?.history) ? req.body.history.length : null,
+      openaiApiKeySource,
+      chatModel: OPENAI_CHAT_MODEL,
+    });
+    res.status(500).json({ error: "Ask failed", requestId });
   }
 });
 

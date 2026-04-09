@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { AnalysisResult, ChatResponse, ScreenshotMetadata } from "../../types";
+import { AnalysisResult, ChatMessage, ChatResponse, ScreenshotMetadata } from "../../types";
 import { authenticatedFetch } from "../supabase";
 
 const API_URL = (import.meta as any).env.VITE_API_URL;
@@ -69,15 +69,29 @@ export const generateEmbedding = async (text: string): Promise<number[]> => {
 
 export const askScreenshots = async (
   question: string, 
-  relevantScreenshots: ScreenshotMetadata[]
+  relevantScreenshots: ScreenshotMetadata[],
+  history: ChatMessage[] = [],
 ): Promise<ChatResponse> => {
-  const context = relevantScreenshots.map(s => 
-    `ID: ${s.id}\nSummary: ${s.summary}\nOCR Text: ${s.ocrText}\nEntities: ${JSON.stringify(s.entities)}`
-  ).join("\n---\n");
+  const context = relevantScreenshots.map((s) => ({
+    id: s.id,
+    category: s.category,
+    summary: s.summary,
+    ocrText: s.ocrText,
+    tags: s.tags,
+    entities: s.entities,
+  }));
   const res = await authenticatedFetch(buildApiUrl("/api/ask"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question, context }),
+    body: JSON.stringify({
+      question,
+      context,
+      history: history.map((message) => ({
+        role: message.role,
+        text: message.text,
+        ids: message.ids ?? [],
+      })),
+    }),
   });
   if (!res.ok) throw await buildBackendError(res, "Backend ask failed");
   return await res.json();

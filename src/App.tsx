@@ -19,7 +19,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
-import { ScreenshotMetadata, Category } from './types';
+import { ScreenshotMetadata, Category, ChatMessage } from './types';
 import { 
   getAllScreenshots, 
   saveScreenshot, 
@@ -53,6 +53,18 @@ import { Cloud } from 'lucide-react';
 import { mapDbToScreenshot, mapScreenshotToDb } from './lib/mapping';
 import { LandingPage } from './pages/LandingPage';
 import { buildWebSocketUrl } from './lib/api';
+
+const FOLLOW_UP_QUERY_RE = /^(why|how|and|more|explain|because|what about|it|this|that|those|them)\b/i;
+const RECENT_SCREENSHOT_QUERY_RE = /\b(upload(?:ed)?|latest|last|recent|new|this|that|it|screenshot|screen)\b/i;
+
+function getScreenshotsByIds(
+  source: ScreenshotMetadata[],
+  ids: (string | number)[],
+) {
+  if (ids.length === 0) return [];
+  const wanted = new Set(ids.map((id) => String(id)));
+  return source.filter((screenshot) => screenshot.id != null && wanted.has(String(screenshot.id)));
+}
 
 export default function App() {
   const [currentPage, setCurrentPage] = useState<'home' | 'sources'>('home');
@@ -499,10 +511,64 @@ export default function App() {
     }
   };
 
-  const handleChat = async (text: string) => {
-    // RAG: Find relevant screenshots first
-    const relevant = await semanticSearch(text, screenshots);
-    return await askScreenshots(text, relevant.slice(0, 5));
+  const handleChat = async (text: string, history: ChatMessage[]) => {
+    const normalizedText = text.trim().toLowerCase();
+    const recentScreenshots = [...screenshots].sort((a, b) => b.createdAt - a.createdAt);
+    const latestScreenshot = recentScreenshots[0];
+    const latestAnalyzedScreenshot = recentScreenshots.find(
+      (screenshot) => screenshot.isAnalyzed && Boolean(screenshot.summary.trim() || screenshot.ocrText.trim()),
+    );
+    const previousReferencedIds = [...history]
+      .reverse()
+      .find((message) => message.role === 'ai' && Array.isArray(message.ids) && message.ids.length > 0)
+      ?.ids ?? [];
+    const previousContext = getScreenshotsByIds(screenshots, previousReferencedIds);
+    const isFollowUp = normalizedText.split(/\s+/).filter(Boolean).length <= 3 || FOLLOW_UP_QUERY_RE.test(normalizedText);
+    const refersToLatestScreenshot = RECENT_SCREENSHOT_QUERY_RE.test(normalizedText);
+
+    let relevant: ScreenshotMetadata[] = [];
+
+    if (isFollowUp && previousContext.length > 0) {
+      relevant = previousContext;
+    }
+
+    if (relevant.length === 0) {
+      try {
+        relevant = await semanticSearch(text, screenshots);
+      } catch (err) {
+        console.error("Semantic chat search failed, falling back to keyword search:", err);
+      }
+    }
+
+    if (relevant.length === 0) {
+      relevant = keywordSearch(text, screenshots);
+    }
+
+    if (relevant.length === 0 && previousContext.length > 0) {
+      relevant = previousContext;
+    }
+
+    if (relevant.length === 0 && (refersToLatestScreenshot || screenshots.length === 1)) {
+      if (latestScreenshot && !latestScreenshot.isAnalyzed) {
+        return {
+          answer: "The latest screenshot is still being analyzed. As soon as that finishes, I can tell you what it talks about.",
+          used_ids: latestScreenshot.id != null ? [latestScreenshot.id] : [],
+        };
+      }
+
+      if (latestAnalyzedScreenshot) {
+        relevant = [latestAnalyzedScreenshot];
+      }
+    }
+
+    if (relevant.length === 0) {
+      return {
+        answer: "I couldn't match this question to any analyzed screenshot yet. Ask about visible text, or mention the latest uploaded screenshot and I'll use that as context.",
+        used_ids: [],
+      };
+    }
+
+    return await askScreenshots(text, relevant.slice(0, 5), history);
   };
 
   if (authLoading) {

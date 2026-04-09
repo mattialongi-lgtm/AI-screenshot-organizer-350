@@ -7,12 +7,12 @@ import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Send, Sparkles, MessageSquare, Loader2, ChevronRight } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import { ScreenshotMetadata } from '../types';
+import { ChatMessage, ScreenshotMetadata } from '../types';
 
 interface ChatDrawerProps {
   isOpen: boolean;
   onClose: () => void;
-  onSendMessage: (text: string) => Promise<{ answer: string, used_ids: (string | number)[] }>;
+  onSendMessage: (text: string, history: ChatMessage[]) => Promise<{ answer: string, used_ids: (string | number)[] }>;
   screenshots: ScreenshotMetadata[];
 }
 
@@ -22,7 +22,7 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({
   onSendMessage,
   screenshots
 }) => {
-  const [messages, setMessages] = useState<{ role: 'user' | 'ai', text: string, ids?: (string | number)[] }[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -37,13 +37,14 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({
     e.preventDefault();
     if (!input.trim() || isLoading) return;
 
-    const userMsg = input;
+    const userMsg = input.trim();
+    const history = messages;
     setInput('');
     setMessages(prev => [...prev, { role: 'user', text: userMsg }]);
     setIsLoading(true);
 
     try {
-      const response = await onSendMessage(userMsg);
+      const response = await onSendMessage(userMsg, history);
       setMessages(prev => [...prev, { role: 'ai', text: response.answer, ids: response.used_ids }]);
     } catch (err) {
       setMessages(prev => [...prev, { role: 'ai', text: "Sorry, I encountered an error. Please try again." }]);
