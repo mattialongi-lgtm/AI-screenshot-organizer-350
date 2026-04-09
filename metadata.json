@@ -1,5 +1,5 @@
 {
   "name": "ScreenSort",
-  "description": "Intelligently analyze, categorize, and search your screenshots using Gemini AI. Features OCR, entity extraction, and semantic search.",
+  "description": "Intelligently analyze, categorize, and search your screenshots using OpenAI. Features OCR, entity extraction, chat, and semantic search.",
   "requestFramePermissions": []
 }

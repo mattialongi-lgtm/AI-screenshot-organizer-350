@@ -4,7 +4,7 @@
  */
 
 import { ScreenshotMetadata } from "../../types";
-import { generateEmbedding } from "../ai/gemini";
+import { generateEmbedding } from "../ai/openai";
 
 export const keywordSearch = (query: string, screenshots: ScreenshotMetadata[]): ScreenshotMetadata[] => {
   const q = query.toLowerCase();

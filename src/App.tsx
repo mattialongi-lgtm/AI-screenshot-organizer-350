@@ -32,7 +32,7 @@ import {
   generateEmbedding, 
   askScreenshots, 
   isMockMode 
-} from './lib/ai/gemini';
+} from './lib/ai/openai';
 import { keywordSearch, semanticSearch } from './lib/search';
 
 import { UploadDropzone } from './components/UploadDropzone';
@@ -95,7 +95,7 @@ export default function App() {
       ws.onmessage = (event) => {
         try {
           const message = JSON.parse(event.data);
-          if (message.type === 'icloud:newFile' || message.type === 'google:newFile') {
+          if (message.type === 'google:newFile') {
             const newScreenshot = message.data;
             setScreenshots(prev => {
               if (prev.some(s => s.id === newScreenshot.id)) return prev;
@@ -392,29 +392,62 @@ export default function App() {
   };
 
   const handleDelete = async (id: string | number) => {
-    if (confirm("Are you sure you want to delete this screenshot?")) {
-      if (user && isSupabaseConfigured && typeof id === 'string') {
-        // Delete from Supabase Storage and DB
-        const { data } = await supabase
+    if (!confirm("Are you sure you want to delete this screenshot?")) {
+      return;
+    }
+
+    try {
+      if (user && isSupabaseConfigured) {
+        const { data, error: lookupError } = await supabase
           .from('screenshots')
           .select('storage_path')
           .eq('id', id)
           .eq('user_id', user.id)
-          .single();
+          .maybeSingle();
+
+        if (lookupError) {
+          throw lookupError;
+        }
+
+        const { error: tagsDeleteError } = await supabase
+          .from('tags')
+          .delete()
+          .eq('screenshot_id', id);
+
+        if (tagsDeleteError) {
+          throw tagsDeleteError;
+        }
 
         if (data?.storage_path) {
-          await supabase.storage.from('screenshots').remove([data.storage_path]);
+          const { error: storageError } = await supabase.storage
+            .from('screenshots')
+            .remove([data.storage_path]);
+
+          if (storageError) {
+            console.warn('Storage delete warning:', storageError);
+          }
         }
-        await supabase
+
+        const { error: deleteError } = await supabase
           .from('screenshots')
           .delete()
           .eq('id', id)
           .eq('user_id', user.id);
+
+        if (deleteError) {
+          throw deleteError;
+        }
       } else {
         await deleteScreenshot(id as number);
-        setScreenshots(prev => prev.filter(s => s.id !== id));
       }
-      if (selectedScreenshot?.id === id) setSelectedScreenshot(null);
+
+      setScreenshots(prev => prev.filter(s => String(s.id) !== String(id)));
+      if (String(selectedScreenshot?.id) === String(id)) {
+        setSelectedScreenshot(null);
+      }
+    } catch (err: any) {
+      console.error('Delete failed:', err);
+      alert(`Delete Error: ${err.message || JSON.stringify(err)}`);
     }
   };
 

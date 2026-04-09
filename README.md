@@ -1,6 +1,6 @@
 # AI Screenshot Organizer (Apple Native)
 
-A production-quality SwiftUI application for iOS and macOS that intelligently organizes screenshots using Apple's Vision framework and Google's Gemini AI.
+A production-quality SwiftUI application for iOS and macOS that intelligently organizes screenshots using Apple's Vision framework and OpenAI.
 
 ## 🚀 Features
 
@@ -11,7 +11,7 @@ A production-quality SwiftUI application for iOS and macOS that intelligently or
 
 ### 2. AI Analysis Pipeline
 - **On-Device OCR**: Uses Apple's **Vision** framework (`VNRecognizeTextRequest`) for fast, private text extraction.
-- **Hybrid AI (Gemini)**: 
+- **Hybrid AI (OpenAI)**: 
   - **Summarization**: Generates 1-2 line summaries of screenshot content.
   - **Classification**: Categorizes into Chat, Receipt, Social Media, etc.
   - **Entity Extraction**: Identifies dates, amounts, URLs, and emails.
@@ -20,7 +20,7 @@ A production-quality SwiftUI application for iOS and macOS that intelligently or
 
 ### 3. Advanced Search & Chat
 - **Hybrid Search**: Combines keyword matching with semantic relevance.
-- **Semantic Search**: Uses Gemini embeddings for "search by meaning."
+- **Semantic Search**: Uses OpenAI embeddings for "search by meaning."
 - **AI Chat (RAG)**: Ask questions about your screenshots. The app retrieves relevant context and provides answers with visual references.
 
 ### 4. Premium SwiftUI Design
@@ -32,7 +32,7 @@ A production-quality SwiftUI application for iOS and macOS that intelligently or
 - **Language**: Swift 5.10+
 - **Framework**: SwiftUI
 - **Persistence**: SwiftData (Core Data successor)
-- **AI**: Vision (OCR), Gemini API (Analysis & Embeddings)
+- **AI**: Vision (OCR), OpenAI API (Analysis, Chat, and Embeddings)
 - **Automation**: PhotoKit Change Observation, Background Tasks
 
 ## 📦 Project Structure
@@ -46,7 +46,7 @@ A production-quality SwiftUI application for iOS and macOS that intelligently or
 2. Ensure you are targeting **iOS 17+** or **macOS 14+**.
 3. Run the app on a physical device for the best Photos library experience.
 4. **Permissions**: Grant Photos access when prompted.
-5. **AI Setup**: Go to **Sources & AI** (iCloud icon) to enable Cloud-Enhanced AI and enter your Gemini API key.
+5. **AI Setup**: Go to **Sources** to connect Google Drive or upload screenshots manually, then add your OpenAI API key.
 
 ## 🔒 Privacy Notes
 - All image processing for OCR is performed locally on your device.

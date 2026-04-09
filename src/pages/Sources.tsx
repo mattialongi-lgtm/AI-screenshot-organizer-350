@@ -2,10 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
   ArrowLeft,
-  Check,
   Cloud,
-  Copy,
-  FolderOpen,
   Loader2,
   Plus,
   RefreshCw,
@@ -13,7 +10,7 @@ import {
 } from 'lucide-react';
 import { CloudSource, SourceSettings } from '../types';
 import { authenticatedFetch } from '../lib/supabase';
-import { getApiBaseUrl, getApiOrigin } from '../lib/api';
+import { getApiOrigin } from '../lib/api';
 
 interface SourcesPageProps {
   onBack: () => void;
@@ -39,7 +36,7 @@ const parseJsonResponse = async (res: Response) => {
 
 const normalizeSource = (source: any): CloudSource => ({
   id: String(source.id),
-  provider: source.provider === 'googleDrive' ? 'googleDrive' : 'icloudFolder',
+  provider: 'googleDrive',
   status: source.status === 'error' ? 'error' : source.status === 'connected' ? 'connected' : 'disconnected',
   connectedAt:
     typeof source.connectedAt === 'number'
@@ -54,8 +51,6 @@ const normalizeSource = (source: any): CloudSource => ({
         ? new Date(source.last_sync).getTime()
         : undefined,
   accountEmail: source.accountEmail || source.email || undefined,
-  localPath: source.localPath || source.local_path || undefined,
-  agentStatus: source.agentStatus === 'online' ? 'online' : source.agentStatus === 'offline' ? 'offline' : undefined,
   settings: source.settings || defaultSourceSettings,
 });
 
@@ -63,9 +58,6 @@ export const SourcesPage: React.FC<SourcesPageProps> = ({ onBack }) => {
   const [sources, setSources] = useState<CloudSource[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  const [copyingCommand, setCopyingCommand] = useState(false);
-  const [agentTokenExpiry, setAgentTokenExpiry] = useState<number | null>(null);
 
   useEffect(() => {
     void loadSources();
@@ -78,10 +70,6 @@ export const SourcesPage: React.FC<SourcesPageProps> = ({ onBack }) => {
 
   const googleSource = useMemo(
     () => sources.find((source) => source.provider === 'googleDrive'),
-    [sources]
-  );
-  const iCloudSource = useMemo(
-    () => sources.find((source) => source.provider === 'icloudFolder'),
     [sources]
   );
 
@@ -208,42 +196,6 @@ export const SourcesPage: React.FC<SourcesPageProps> = ({ onBack }) => {
     }
   };
 
-  const copyAgentCommand = async () => {
-    setCopyingCommand(true);
-
-    try {
-      const res = await authenticatedFetch('/api/icloud/agent-token', { method: 'POST' });
-      const payload = await parseJsonResponse(res);
-
-      if (!res.ok || !payload.token) {
-        throw new Error(payload.error || 'Failed to create the iCloud agent token.');
-      }
-
-      const command = [
-        `$env:AUTH_TOKEN="${payload.token}"`,
-        `$env:API_URL="${getApiBaseUrl()}"`,
-        'npm run agent -- "/path/to/your/icloud/screenshots"',
-      ].join('; ');
-
-      await navigator.clipboard.writeText(command);
-      setAgentTokenExpiry(typeof payload.expiresAt === 'number' ? payload.expiresAt : null);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
-      await loadSources(false);
-    } catch (err: any) {
-      console.error('Failed to copy iCloud agent command:', err);
-      alert(err.message || 'Failed to prepare the iCloud agent command.');
-    } finally {
-      setCopyingCommand(false);
-    }
-  };
-
-  const commandPreview = [
-    '$env:AUTH_TOKEN="..."',
-    `$env:API_URL="${getApiBaseUrl()}"`,
-    'npm run agent -- "/path/to/your/icloud/screenshots"',
-  ].join('; ');
-
   return (
     <div className="space-y-16 animate-in fade-in slide-in-from-bottom-4 duration-700">
       <div className="flex items-center justify-between border-b border-white/5 pb-12">
@@ -262,7 +214,7 @@ export const SourcesPage: React.FC<SourcesPageProps> = ({ onBack }) => {
         {loading && <Loader2 className="w-5 h-5 text-accent animate-spin" />}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
+      <div className="grid grid-cols-1 gap-12">
         <SourceCard
           title="Google Drive"
           description="Connect your Google Drive and ingest screenshot files directly from the archive."
@@ -273,124 +225,6 @@ export const SourcesPage: React.FC<SourcesPageProps> = ({ onBack }) => {
           onSync={(id) => void handleSync(id)}
           isSyncing={syncing === googleSource?.id}
         />
-
-        <div className="editorial-card p-10 space-y-10">
-          <div className="flex items-start justify-between gap-6">
-            <div className="flex items-center gap-6">
-              <div className="w-14 h-14 border border-white/10 flex items-center justify-center rotate-45">
-                <FolderOpen className="w-6 h-6 text-bone -rotate-45" />
-              </div>
-              <div>
-                <h3 className="text-2xl font-serif italic leading-none">iCloud Node</h3>
-                <p className="mono-label mt-2 text-[9px]">
-                  {iCloudSource?.agentStatus === 'online'
-                    ? 'Local agent online'
-                    : iCloudSource
-                      ? 'Awaiting local agent'
-                      : 'Not configured yet'}
-                </p>
-              </div>
-            </div>
-            <div
-              className={`mono-label text-[8px] px-3 py-1 border ${
-                iCloudSource?.agentStatus === 'online'
-                  ? 'border-accent/30 text-accent'
-                  : iCloudSource
-                    ? 'border-white/10 text-bone'
-                    : 'border-white/10 text-muted'
-              }`}
-            >
-              {iCloudSource?.agentStatus === 'online'
-                ? 'Online'
-                : iCloudSource
-                  ? 'Ready'
-                  : 'Setup'}
-            </div>
-          </div>
-
-          <div className="space-y-8">
-            <div className="p-6 bg-white/[0.02] border border-white/5 space-y-4">
-              <h4 className="mono-label text-[9px]">Protocol</h4>
-              <ol className="mono-label text-[9px] space-y-3 opacity-60">
-                <li className="flex gap-4"><span>01</span> Generate the local agent command below.</li>
-                <li className="flex gap-4"><span>02</span> Run it in PowerShell on the machine that syncs iCloud Drive.</li>
-                <li className="flex gap-4"><span>03</span> Existing screenshots are imported immediately, then new ones stream in automatically.</li>
-              </ol>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="p-6 bg-white/[0.02] border border-white/5 space-y-2">
-                <p className="mono-label text-[8px] opacity-40">Local Path</p>
-                <p className="mono-label text-[9px] text-bone break-all">
-                  {iCloudSource?.localPath || 'Set when the agent comes online.'}
-                </p>
-              </div>
-              <div className="p-6 bg-white/[0.02] border border-white/5 space-y-2">
-                <p className="mono-label text-[8px] opacity-40">Last Import</p>
-                <p className="mono-label text-[9px] text-bone">
-                  {iCloudSource?.lastSyncAt ? new Date(iCloudSource.lastSyncAt).toLocaleString() : 'Not yet imported'}
-                </p>
-              </div>
-            </div>
-
-            <div className="space-y-3">
-              <label className="mono-label text-[9px]">Agent Command</label>
-              <div className="flex items-center gap-4 p-4 bg-ink border border-white/10 font-mono text-[11px] text-bone overflow-hidden group">
-                <span className="truncate opacity-70 group-hover:opacity-100 transition-opacity">
-                  {commandPreview}
-                </span>
-                <button
-                  onClick={() => void copyAgentCommand()}
-                  disabled={copyingCommand}
-                  className="shrink-0 text-muted hover:text-accent transition-colors disabled:opacity-50"
-                >
-                  {copyingCommand ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : copied ? (
-                    <Check className="w-4 h-4 text-accent" />
-                  ) : (
-                    <Copy className="w-4 h-4" />
-                  )}
-                </button>
-              </div>
-              {agentTokenExpiry && (
-                <p className="mono-label text-[9px] opacity-50">
-                  Latest copied token expires on {new Date(agentTokenExpiry).toLocaleString()}.
-                </p>
-              )}
-            </div>
-          </div>
-
-          <div className="pt-8 border-t border-white/5 flex items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div
-                className={`w-1.5 h-1.5 rounded-full ${
-                  iCloudSource?.agentStatus === 'online' ? 'bg-accent animate-pulse' : 'bg-white/30'
-                }`}
-              />
-              <span className="mono-label text-[9px]">
-                {iCloudSource?.agentStatus === 'online' ? 'Monitoring stream is active.' : 'Waiting for the local agent to connect.'}
-              </span>
-            </div>
-            <div className="flex items-center gap-3">
-              {iCloudSource && (
-                <button
-                  onClick={() => void handleDisconnect(iCloudSource.id)}
-                  className="w-10 h-10 border border-accent/40 flex items-center justify-center text-accent hover:bg-accent hover:text-ink transition-all"
-                  title="Disconnect iCloud source"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              )}
-              <button
-                onClick={() => void loadSources(false)}
-                className="mono-label text-[9px] text-accent hover:text-bone transition-colors"
-              >
-                Refresh Status
-              </button>
-            </div>
-          </div>
-        </div>
       </div>
 
       <div className="border border-white/5 bg-white/[0.01] p-12 space-y-10">
@@ -406,15 +240,15 @@ export const SourcesPage: React.FC<SourcesPageProps> = ({ onBack }) => {
             </p>
           </div>
           <div className="space-y-4">
-            <h4 className="mono-label text-bone">iCloud Agent</h4>
+            <h4 className="mono-label text-bone">Manual Upload</h4>
             <p className="mono-label text-[9px] leading-relaxed opacity-50">
-              The copied command now includes a dedicated agent token and imports existing files on first launch.
+              You can keep uploading screenshots manually from the main archive view exactly as before.
             </p>
           </div>
           <div className="space-y-4">
-            <h4 className="mono-label text-bone">Network Base URL</h4>
+            <h4 className="mono-label text-bone">Sources Scope</h4>
             <p className="mono-label text-[9px] leading-relaxed opacity-50">
-              Current agent API target: {getApiBaseUrl()}
+              iCloud has been removed from the product surface. Google Drive remains the only connected cloud source.
             </p>
           </div>
         </div>

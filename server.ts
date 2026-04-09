@@ -5,7 +5,7 @@ import path from "path";
 import multer from "multer";
 import { createClient, type User } from "@supabase/supabase-js";
 import fs from "fs";
-import { GoogleGenAI } from "@google/genai";
+import OpenAI from "openai";
 import { fileURLToPath } from "url";
 import crypto from "crypto";
 
@@ -73,14 +73,15 @@ const agentTokenSecret = process.env.AGENT_TOKEN_SECRET || oauthStateSecret;
 const agentTokenTtlDays = Number(process.env.AGENT_TOKEN_TTL_DAYS) > 0
   ? Number(process.env.AGENT_TOKEN_TTL_DAYS)
   : 90;
-const geminiApiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
-const geminiApiKeySource = process.env.GEMINI_API_KEY
-  ? "GEMINI_API_KEY"
-  : process.env.VITE_GEMINI_API_KEY
-    ? "VITE_GEMINI_API_KEY"
-    : null;
-const GEMINI_ANALYSIS_MODEL = process.env.GEMINI_ANALYSIS_MODEL || "gemini-2.5-flash";
-const GEMINI_EMBEDDING_MODEL = process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-2-preview";
+const openaiApiKey = process.env.OPENAI_API_KEY;
+const openaiApiKeySource = process.env.OPENAI_API_KEY ? "OPENAI_API_KEY" : null;
+const OPENAI_ANALYSIS_MODEL = process.env.OPENAI_ANALYSIS_MODEL || "gpt-4.1-mini";
+const OPENAI_CHAT_MODEL = process.env.OPENAI_CHAT_MODEL || "gpt-4.1-mini";
+const OPENAI_EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small";
+const OPENAI_EMBEDDING_DIMENSIONS = Number(process.env.OPENAI_EMBEDDING_DIMENSIONS) > 0
+  ? Number(process.env.OPENAI_EMBEDDING_DIMENSIONS)
+  : 768;
+const openai = openaiApiKey ? new OpenAI({ apiKey: openaiApiKey }) : null;
 const OPTIONAL_ANALYSIS_COLUMNS = new Set([
   "embedding",
   "entities",
@@ -217,12 +218,12 @@ function createGoogleOAuthClient(redirectUri?: string | null) {
   );
 }
 
-function requireGeminiApiKey() {
-  if (!geminiApiKey) {
-    throw new Error("Missing Gemini API key. Set GEMINI_API_KEY on the backend runtime.");
+function getOpenAIClient() {
+  if (!openai) {
+    throw new Error("Missing OpenAI API key. Set OPENAI_API_KEY on the backend runtime.");
   }
 
-  return geminiApiKey;
+  return openai;
 }
 
 function createRequestId() {
@@ -285,7 +286,7 @@ function logRouteError(
 }
 
 function buildAnalysisPrompt() {
-  return `Analyze this screenshot and return a JSON object with the following schema:
+  return `Analyze this screenshot and return only valid JSON with the following fields:
 {
   "category": "Chat" | "Receipt" | "Social Media" | "Email" | "Document" | "Meme" | "Banking" | "E-commerce" | "Booking" | "Other",
   "summary": "1-2 line summary",
@@ -303,6 +304,62 @@ function buildAnalysisPrompt() {
   "safety": { "contains_sensitive": true/false, "reason": "" }
 }`;
 }
+
+const SCREENSHOT_ANALYSIS_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    category: {
+      type: "string",
+      enum: ["Chat", "Receipt", "Social Media", "Email", "Document", "Meme", "Banking", "E-commerce", "Booking", "Other"],
+    },
+    summary: { type: "string" },
+    ocr_text: { type: "string" },
+    tags: {
+      type: "array",
+      items: { type: "string" },
+    },
+    entities: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        dates: { type: "array", items: { type: "string" } },
+        amounts: { type: "array", items: { type: "string" } },
+        emails: { type: "array", items: { type: "string" } },
+        urls: { type: "array", items: { type: "string" } },
+        phones: { type: "array", items: { type: "string" } },
+        order_ids: { type: "array", items: { type: "string" } },
+        merchant: { type: "string" },
+      },
+      required: ["dates", "amounts", "emails", "urls", "phones", "order_ids", "merchant"],
+    },
+    safety: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        contains_sensitive: { type: "boolean" },
+        reason: { type: "string" },
+      },
+      required: ["contains_sensitive", "reason"],
+    },
+  },
+  required: ["category", "summary", "ocr_text", "tags", "entities", "safety"],
+} as const;
+
+const SCREENSHOT_ANSWER_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    answer: { type: "string" },
+    used_ids: {
+      type: "array",
+      items: {
+        anyOf: [{ type: "string" }, { type: "number" }],
+      },
+    },
+  },
+  required: ["answer", "used_ids"],
+} as const;
 
 function normalizeStringArray(value: unknown) {
   if (!Array.isArray(value)) return [];
@@ -497,7 +554,6 @@ function isICloudSourceId(value?: string | null) {
 
 function mapSourceTypeToProvider(type?: string | null) {
   if (type === GOOGLE_SOURCE_TYPE) return "googleDrive";
-  if (type === ICLOUD_SOURCE_TYPE) return "icloudFolder";
   return type ?? "upload";
 }
 
@@ -532,9 +588,7 @@ function buildRealtimeScreenshotPayload(row: any) {
     source:
       row.source === GOOGLE_SOURCE_TYPE
         ? "googleDrive"
-        : row.source === ICLOUD_SOURCE_TYPE || row.source_id === ICLOUD_SOURCE_TYPE || isICloudSourceId(row.source_id)
-          ? "icloudFolder"
-          : "upload",
+        : "upload",
     imageUrl: getPublicStorageUrl(storagePath),
     isAnalyzed: !!(row.is_analyzed === 1 || row.is_analyzed === true),
     isSensitive: !!(row.is_sensitive === 1 || row.is_sensitive === true),
@@ -552,8 +606,6 @@ function serializeCloudSource(row: any, userId: string) {
     connectedAt: row.connected_at ? new Date(row.connected_at).getTime() : undefined,
     lastSyncAt: row.last_sync ? new Date(row.last_sync).getTime() : undefined,
     accountEmail: row.email || undefined,
-    localPath: row.local_path || undefined,
-    agentStatus: provider === "icloudFolder" ? getICloudAgentStatus(userId) : undefined,
     settings: parseSourceSettings(row.settings),
   };
 }
@@ -1001,140 +1053,49 @@ app.get("/uploads/:filename", requireAuth, async (req, res) => {
 
 // iCloud Import Endpoint (called by local agent)
 app.post("/api/icloud/import", requireAuth, upload.single("file"), async (req, res) => {
-  try {
-    if (!req.user) return res.status(401).json({ error: "Authentication required" });
-    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
-    const { localPath, modifiedTime } = req.body;
-    const normalizedLocalPath = typeof localPath === "string" ? localPath.trim() : "";
-    const externalId = normalizedLocalPath || `icloud:${req.file.originalname}:${modifiedTime || req.file.filename}`;
-    const sourceId = buildICloudSourceId(req.user.id);
-
-    // Check if already exists
-    const { data: existingScreenshots } = await supabase
-      .from('screenshots')
-      .select('id')
-      .eq('external_id', externalId)
-      .eq('user_id', req.user.id);
-
-    if (existingScreenshots && existingScreenshots.length > 0) {
-      fs.unlinkSync(req.file.path);
-      await ensureICloudSource(req.user.id, {
-        lastSync: new Date().toISOString(),
-        localPath: normalizedLocalPath || null,
-        status: "connected",
-      });
-      return res.json({ success: true, skipped: true });
-    }
-
-    await ensureICloudSource(req.user.id, {
-      localPath: normalizedLocalPath || null,
-      status: "connected",
-    });
-
-    const buffer = fs.readFileSync(req.file.path);
-    const storagePath = await uploadBufferToStorage(
-      req.user.id,
-      req.file.originalname,
-      buffer,
-      req.file.mimetype,
-    );
-    const analysis = await analyzeScreenshot(
-      buffer,
-      resolveMimeType(req.file.originalname, req.file.mimetype),
-    );
-    const embedding = await generateEmbedding(analysis.summary + " " + analysis.ocr_text);
-
-    const { data: dbData, error: dbError } = await supabase
-      .from('screenshots')
-      .insert([{
-        user_id: req.user.id,
-        filename: storagePath,
-        storage_path: storagePath,
-        original_name: req.file.originalname,
-        category: analysis.category,
-        summary: analysis.summary,
-        ocr_text: analysis.ocr_text,
-        entities: analysis.entities,
-        embedding: embedding,
-        is_sensitive: analysis.safety?.contains_sensitive ? 1 : 0,
-        is_analyzed: 1,
-        safety_reason: analysis.safety?.reason || "",
-        last_analyzed_at: new Date().toISOString(),
-        source_id: sourceId,
-        external_id: externalId,
-        upload_date: modifiedTime || new Date().toISOString(),
-      }])
-      .select()
-      .single();
-
-    if (dbError) {
-      console.error("Supabase insert error (iCloud):", dbError);
-      throw dbError;
-    }
-    await replaceScreenshotTagsBestEffort("/api/icloud/import", dbData.id, analysis.tags);
-    console.log("Supabase insert success (iCloud):", dbData.id);
-    await ensureICloudSource(req.user.id, {
-      lastSync: new Date().toISOString(),
-      localPath: normalizedLocalPath || null,
-      status: "connected",
-    });
-
-    const newScreenshot = buildRealtimeScreenshotPayload({
-      ...dbData,
-      source_id: sourceId,
-    });
-
-    broadcastToUser(req.user.id, { type: 'icloud:newFile', data: newScreenshot });
-    res.json({ success: true, id: dbData.id });
-  } catch (error) {
-    console.error("iCloud import error:", error);
-    res.status(500).json({ error: "Failed to process iCloud screenshot" });
-  } finally {
-    if (req.file?.path && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
-    }
+  if (req.file?.path && fs.existsSync(req.file.path)) {
+    fs.unlinkSync(req.file.path);
   }
+
+  res.status(410).json({ error: "iCloud import has been removed. Use Google Drive or manual upload instead." });
 });
 
 // AI Service Logic
 async function analyzeScreenshot(buffer: Buffer, mimeType = "image/png") {
-  const ai = new GoogleGenAI({ apiKey: requireGeminiApiKey() });
   const imageData = buffer.toString("base64");
+  const normalizedMimeType = normalizeAnalyzeMimeType(mimeType);
 
-  const response = await ai.models.generateContent({
-    model: GEMINI_ANALYSIS_MODEL,
-    contents: [
+  const response = await getOpenAIClient().chat.completions.create({
+    model: OPENAI_ANALYSIS_MODEL,
+    messages: [
       {
-        parts: [
+        role: "system",
+        content: "You analyze screenshots and return structured metadata.",
+      },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: buildAnalysisPrompt() },
           {
-            inlineData: {
-              mimeType: normalizeAnalyzeMimeType(mimeType),
-              data: imageData,
+            type: "image_url",
+            image_url: {
+              url: `data:${normalizedMimeType};base64,${imageData}`,
             },
           },
-          { text: buildAnalysisPrompt() },
         ],
       },
     ],
-    config: {
-      responseMimeType: "application/json",
+    response_format: {
+      type: "json_schema",
+      json_schema: {
+        name: "screenshot_analysis",
+        strict: true,
+        schema: SCREENSHOT_ANALYSIS_SCHEMA,
+      },
     },
   });
 
-  // Handle different SDK response formats
-  let text = '';
-  const res = response as any;
-  if (typeof res.text === 'function') {
-    text = await res.text();
-  } else if (typeof res.text === 'string') {
-    text = res.text;
-  } else if (res.response && typeof res.response.text === 'function') {
-    text = await res.response.text();
-  } else if (res.response && typeof res.response.text === 'string') {
-    text = res.response.text;
-  }
-
-  return normalizeAnalysisResult(parseJsonResponse(text));
+  return normalizeAnalysisResult(parseJsonResponse(extractChatCompletionText(response)));
 }
 
 async function generateEmbedding(text: string) {
@@ -1143,28 +1104,62 @@ async function generateEmbedding(text: string) {
     return [];
   }
 
-  const ai = new GoogleGenAI({ apiKey: requireGeminiApiKey() });
-  const result = await ai.models.embedContent({
-    model: GEMINI_EMBEDDING_MODEL,
-    contents: [{ parts: [{ text: normalizedText }] }],
+  const result = await getOpenAIClient().embeddings.create({
+    model: OPENAI_EMBEDDING_MODEL,
+    input: normalizedText,
+    encoding_format: "float",
+    ...(OPENAI_EMBEDDING_MODEL.startsWith("text-embedding-3")
+      ? { dimensions: OPENAI_EMBEDDING_DIMENSIONS }
+      : {}),
   });
 
-  const values = (result as any).embeddings?.[0]?.values || (result as any).embedding?.values;
+  const values = result.data[0]?.embedding;
   if (!Array.isArray(values) || values.length === 0) {
     throw new Error("Empty embedding response from AI");
+  }
+
+  if (values.length !== OPENAI_EMBEDDING_DIMENSIONS) {
+    throw new Error(
+      `Unexpected embedding dimension: got ${values.length}, expected ${OPENAI_EMBEDDING_DIMENSIONS}`,
+    );
   }
 
   return values;
 }
 
+type ChatCompletionTextResponse = {
+  choices?: Array<{
+    message?: {
+      content?: string | Array<{ type?: string; text?: string }>;
+      refusal?: string | null;
+    };
+  }>;
+};
+
 // Frontend-facing AI proxy endpoints (used when frontend sets VITE_API_URL)
-async function extractResponseText(response: any): Promise<string> {
-  const r = response as any;
-  if (typeof r.text === 'function') return await r.text();
-  if (typeof r.text === 'string') return r.text;
-  if (r.response && typeof r.response.text === 'function') return await r.response.text();
-  if (r.response && typeof r.response.text === 'string') return r.response.text;
-  return '';
+function extractChatCompletionText(response: ChatCompletionTextResponse) {
+  const message = response.choices[0]?.message;
+  if (!message) {
+    throw new Error("Empty response from AI");
+  }
+
+  if (message.refusal) {
+    throw new Error(`AI refused request: ${message.refusal}`);
+  }
+
+  if (typeof message.content === "string") {
+    return message.content;
+  }
+
+  if (Array.isArray(message.content)) {
+    return message.content
+      .filter((part): part is { type: "text"; text: string } => part.type === "text" && typeof part.text === "string")
+      .map((part) => part.text)
+      .join("\n")
+      .trim();
+  }
+
+  return "";
 }
 
 function parseJsonResponse(text: string) {
@@ -1362,8 +1357,8 @@ app.post("/api/analyze", requireAuth, async (req, res) => {
       storagePath,
       mimeType: normalizedMimeType,
       imageBytes: buffer.length,
-      geminiApiKeySource,
-      analysisModel: GEMINI_ANALYSIS_MODEL,
+      openaiApiKeySource,
+      analysisModel: OPENAI_ANALYSIS_MODEL,
     });
 
     const analysis = await analyzeScreenshot(buffer, normalizedMimeType);
@@ -1410,8 +1405,8 @@ app.post("/api/analyze", requireAuth, async (req, res) => {
       hasImage: typeof req.body?.image === "string",
       imageLength: typeof req.body?.image === "string" ? req.body.image.length : null,
       mimeType: normalizeAnalyzeMimeType(req.body?.mimeType),
-      geminiApiKeySource,
-      analysisModel: GEMINI_ANALYSIS_MODEL,
+      openaiApiKeySource,
+      analysisModel: OPENAI_ANALYSIS_MODEL,
     });
     res.status(500).json({ error: "Analysis failed", requestId });
   }
@@ -1428,8 +1423,8 @@ app.post("/api/embed", requireAuth, async (req, res) => {
     logRouteError("/api/embed", requestId, req, error, {
       stage: "failed",
       textLength: typeof req.body?.text === "string" ? req.body.text.length : null,
-      embeddingModel: GEMINI_EMBEDDING_MODEL,
-      geminiApiKeySource,
+      embeddingModel: OPENAI_EMBEDDING_MODEL,
+      openaiApiKeySource,
     });
     res.status(500).json({ error: "Embedding failed", requestId });
   }
@@ -1440,39 +1435,39 @@ app.post("/api/ask", requireAuth, async (req, res) => {
     const { question, context } = req.body;
     if (!question) return res.status(400).json({ error: "No question provided" });
 
-    const ai = new GoogleGenAI({ apiKey: requireGeminiApiKey() });
     const contextText = (context || []).map((s: any) =>
       `ID: ${s.id}\nSummary: ${s.summary}\nOCR Text: ${s.ocrText}\nEntities: ${JSON.stringify(s.entities)}`
     ).join("\n---\n");
 
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: [
+    const response = await getOpenAIClient().chat.completions.create({
+      model: OPENAI_CHAT_MODEL,
+      messages: [
         {
-          parts: [
-            {
-              text: `You are an AI assistant helping a user with their screenshots.
-              Answer the user's question using ONLY the provided context.
-              If the answer is not in the context, say you don't know.
-              Return a JSON object with the following schema:
-              {
-                "answer": "your answer here",
-                "used_ids": [id1, id2, ...]
-              }
-
-              Context:
-              ${contextText}
-
-              Question: ${question}`,
-            },
-          ],
+          role: "system",
+          content: "You are an AI assistant helping a user with their screenshots. Answer using only the provided context. If the answer is not present, say you don't know.",
+        },
+        {
+          role: "user",
+          content: `Return valid JSON matching the required schema.\n\nContext:\n${contextText || "(no context provided)"}\n\nQuestion: ${question}`,
         },
       ],
-      config: { responseMimeType: "application/json" },
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "screenshot_answer",
+          strict: true,
+          schema: SCREENSHOT_ANSWER_SCHEMA,
+        },
+      },
     });
 
-    const text = await extractResponseText(response);
-    res.json(parseJsonResponse(text));
+    const parsed = parseJsonResponse(extractChatCompletionText(response));
+    res.json({
+      answer: typeof parsed?.answer === "string" ? parsed.answer : "",
+      used_ids: Array.isArray(parsed?.used_ids)
+        ? parsed.used_ids.filter((value: unknown): value is string | number => typeof value === "string" || typeof value === "number")
+        : [],
+    });
   } catch (error) {
     console.error("Ask error:", error);
     res.status(500).json({ error: "Ask failed" });
@@ -1590,21 +1585,7 @@ app.get("/api/auth/google/callback", async (req, res) => {
 });
 
 app.post("/api/icloud/agent-token", requireAuth, requireSupabaseAuth, async (req, res) => {
-  try {
-    if (!req.user) {
-      return res.status(401).json({ error: "Authentication required" });
-    }
-
-    await ensureICloudSource(req.user.id, { status: "connected" });
-
-    res.json({
-      expiresAt: Date.now() + agentTokenTtlDays * 24 * 60 * 60 * 1000,
-      token: buildAgentToken(req.user.id),
-    });
-  } catch (error) {
-    console.error("Failed to create iCloud agent token:", error);
-    res.status(500).json({ error: "Failed to create iCloud agent token." });
-  }
+  res.status(410).json({ error: "iCloud has been removed. Use Google Drive or manual upload instead." });
 });
 
 app.get("/api/sources", requireAuth, async (req, res) => {
@@ -1613,7 +1594,8 @@ app.get("/api/sources", requireAuth, async (req, res) => {
   const { data: sources, error } = await supabase
     .from('cloud_sources')
     .select('id, type, email, local_path, last_sync, status, connected_at, settings')
-    .eq('user_id', req.user.id);
+    .eq('user_id', req.user.id)
+    .eq('type', GOOGLE_SOURCE_TYPE);
 
   if (error) return res.status(500).json({ error: error.message });
 
@@ -1645,7 +1627,7 @@ app.post("/api/sources/:id/disconnect", requireAuth, async (req, res) => {
   if (!req.user) return res.status(401).json({ error: "Authentication required" });
 
   const source = await getOwnedSource(id, req.user.id);
-  if (!source) {
+  if (!source || source.type !== GOOGLE_SOURCE_TYPE) {
     return res.status(404).json({ error: "Source not found" });
   }
 
@@ -1680,7 +1662,8 @@ app.post("/api/sync", requireAuth, async (req, res) => {
   let sourcesQuery = supabase
     .from('cloud_sources')
     .select('*')
-    .eq('user_id', req.user.id);
+    .eq('user_id', req.user.id)
+    .eq('type', GOOGLE_SOURCE_TYPE);
 
   if (sourceId) {
     sourcesQuery = sourcesQuery.eq('id', sourceId);
@@ -1963,7 +1946,6 @@ app.post("/api/chat", requireAuth, async (req, res) => {
     if (!req.user) return res.status(401).json({ error: "Authentication required" });
     const { message, contextIds } = req.body;
     if (!message) return res.status(400).json({ error: "No message provided" });
-    const ai = new GoogleGenAI({ apiKey: requireGeminiApiKey() });
 
     // Fetch context from DB
     const { data: contextScreenshots, error } = await supabase
@@ -1978,24 +1960,21 @@ app.post("/api/chat", requireAuth, async (req, res) => {
       `[Category: ${s.category}] Summary: ${s.summary}\nText: ${s.ocr_text}`
     ).join("\n---\n");
 
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: [
+    const response = await getOpenAIClient().chat.completions.create({
+      model: OPENAI_CHAT_MODEL,
+      messages: [
         {
-          parts: [
-            {
-              text: `You are an AI assistant helping a user with their screenshots. 
-              Here is the context from relevant screenshots:
-              ${contextText}
-              
-              User Question: ${message}`,
-            },
-          ],
+          role: "system",
+          content: "You are an AI assistant helping a user with their screenshots.",
+        },
+        {
+          role: "user",
+          content: `Here is the context from relevant screenshots:\n${contextText || "(no matching screenshots found)"}\n\nUser Question: ${message}`,
         },
       ],
     });
 
-    const text = await extractResponseText(response);
+    const text = extractChatCompletionText(response);
     res.json({ text });
   } catch (error) {
     res.status(500).json({ error: "Chat failed" });
@@ -2004,9 +1983,15 @@ app.post("/api/chat", requireAuth, async (req, res) => {
 
 // Helper functions for vector math
 function dotProduct(a: number[], b: number[]) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length === 0 || b.length === 0 || a.length !== b.length) {
+    return 0;
+  }
   return a.reduce((sum, val, i) => sum + val * b[i], 0);
 }
 function magnitude(a: number[]) {
+  if (!Array.isArray(a) || a.length === 0) {
+    return 0;
+  }
   return Math.sqrt(a.reduce((sum, val) => sum + val * val, 0));
 }
 
@@ -2023,10 +2008,12 @@ async function startServer() {
     nodeEnv: process.env.NODE_ENV || "development",
     port: PORT,
     supabaseConfigured: Boolean(supabaseUrl && supabaseServiceRoleKey),
-    geminiConfigured: Boolean(geminiApiKey),
-    geminiApiKeySource,
-    analysisModel: GEMINI_ANALYSIS_MODEL,
-    embeddingModel: GEMINI_EMBEDDING_MODEL,
+    openaiConfigured: Boolean(openaiApiKey),
+    openaiApiKeySource,
+    analysisModel: OPENAI_ANALYSIS_MODEL,
+    chatModel: OPENAI_CHAT_MODEL,
+    embeddingModel: OPENAI_EMBEDDING_MODEL,
+    embeddingDimensions: OPENAI_EMBEDDING_DIMENSIONS,
   })}`);
 
   server.listen({ port: PORT, host: "0.0.0.0" }, () => {

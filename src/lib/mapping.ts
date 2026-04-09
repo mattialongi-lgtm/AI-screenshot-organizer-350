@@ -19,9 +19,7 @@ export const mapDbToScreenshot = (dbData: any): ScreenshotMetadata => {
   const source =
     dbData.source === 'googleDrive' || dbData.source === 'google_drive' || String(dbData.source_id || '').startsWith('google_drive:')
       ? 'googleDrive'
-      : dbData.source === 'icloudFolder' || dbData.source === 'icloud_folder' || String(dbData.source_id || '').startsWith('icloud_folder')
-        ? 'icloudFolder'
-        : (dbData.source || 'upload');
+      : (dbData.source || 'upload');
   
   // Reconstruct imageUrl from storage path if not directly provided
   let imageUrl = dbData.imageUrl || dbData.image_url;
