@@ -67,9 +67,20 @@ const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
 const configuredFrontendAppUrl = normalizeUrl(process.env.APP_URL);
 const configuredApiPublicUrl = normalizeUrl(process.env.API_PUBLIC_URL);
 const configuredGoogleRedirectUri = normalizeUrl(process.env.GOOGLE_OAUTH_REDIRECT_URI);
-const oauthStateSecret = process.env.GOOGLE_OAUTH_STATE_SECRET || supabaseServiceRoleKey;
-const tokenEncryptionSecret = process.env.GOOGLE_TOKEN_ENCRYPTION_KEY || supabaseServiceRoleKey;
-const agentTokenSecret = process.env.AGENT_TOKEN_SECRET || oauthStateSecret;
+const oauthStateSecret = process.env.GOOGLE_OAUTH_STATE_SECRET;
+const tokenEncryptionSecret = process.env.GOOGLE_TOKEN_ENCRYPTION_KEY;
+const agentTokenSecret = process.env.AGENT_TOKEN_SECRET;
+
+if (!oauthStateSecret || !tokenEncryptionSecret || !agentTokenSecret) {
+  const missing = [
+    !oauthStateSecret && "GOOGLE_OAUTH_STATE_SECRET",
+    !tokenEncryptionSecret && "GOOGLE_TOKEN_ENCRYPTION_KEY",
+    !agentTokenSecret && "AGENT_TOKEN_SECRET",
+  ].filter(Boolean);
+  throw new Error(
+    `Missing required environment variables: ${missing.join(", ")}. Set each secret independently before starting the server.`
+  );
+}
 const agentTokenTtlDays = Number(process.env.AGENT_TOKEN_TTL_DAYS) > 0
   ? Number(process.env.AGENT_TOKEN_TTL_DAYS)
   : 90;
@@ -916,81 +927,91 @@ function broadcastToUser(userId: string, data: any) {
   });
 }
 
-wss.on("connection", async (ws, req) => {
-  try {
-    const wsUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
-    const token = wsUrl.searchParams.get("token");
-    if (!token) {
-      ws.close(1008, "Authentication required");
-      return;
-    }
+wss.on("connection", (ws) => {
+  // Require auth message within 5 seconds or close
+  const authTimeout = setTimeout(() => {
+    ws.close(1008, "Authentication timeout");
+  }, 5000);
 
-    const authenticated = await authenticateRequestToken(token);
-    if (!authenticated?.user) {
-      ws.close(1008, "Invalid token");
-      return;
-    }
+  const handleMessage = async (rawMessage: import("ws").RawData) => {
+    try {
+      const parsed = JSON.parse(rawMessage.toString());
 
-    clients.set(ws, {
-      authType: authenticated.authType,
-      role: "client",
-      userId: authenticated.user.id,
-    });
+      if (parsed?.type !== "agent:status") {
+        return;
+      }
 
-    ws.on("message", async (rawMessage) => {
-      try {
-        const parsed = JSON.parse(rawMessage.toString());
-        if (parsed?.type !== "agent:status") {
-          return;
-        }
+      const currentClient = clients.get(ws);
+      if (!currentClient) {
+        return;
+      }
 
-        const currentClient = clients.get(ws);
-        if (!currentClient) {
-          return;
-        }
+      const normalizedPath = typeof parsed.path === "string" && parsed.path.trim()
+        ? parsed.path.trim()
+        : undefined;
 
-        const normalizedPath = typeof parsed.path === "string" && parsed.path.trim()
-          ? parsed.path.trim()
-          : undefined;
-
-        if (parsed.status === "offline") {
-          clients.set(ws, {
-            ...currentClient,
-            path: normalizedPath,
-            role: "client",
-          });
-          broadcastToUser(currentClient.userId, { type: "source:updated" });
-          return;
-        }
-
+      if (parsed.status === "offline") {
         clients.set(ws, {
           ...currentClient,
           path: normalizedPath,
-          role: "agent",
-        });
-
-        await ensureICloudSource(currentClient.userId, {
-          localPath: normalizedPath,
-          status: "connected",
+          role: "client",
         });
         broadcastToUser(currentClient.userId, { type: "source:updated" });
-      } catch (error) {
-        console.error("WebSocket message error:", error);
+        return;
       }
-    });
 
-    ws.on("close", () => {
-      const disconnectedClient = clients.get(ws);
-      clients.delete(ws);
+      clients.set(ws, {
+        ...currentClient,
+        path: normalizedPath,
+        role: "agent",
+      });
 
-      if (disconnectedClient?.role === "agent") {
-        broadcastToUser(disconnectedClient.userId, { type: "source:updated" });
+      await ensureICloudSource(currentClient.userId, {
+        localPath: normalizedPath,
+        status: "connected",
+      });
+      broadcastToUser(currentClient.userId, { type: "source:updated" });
+    } catch (error) {
+      console.error("WebSocket message error:", error);
+    }
+  };
+
+  ws.once("message", async (rawMessage) => {
+    clearTimeout(authTimeout);
+    try {
+      const parsed = JSON.parse(rawMessage.toString());
+      if (parsed?.type !== "auth" || typeof parsed.token !== "string") {
+        ws.close(1008, "Authentication required");
+        return;
       }
-    });
-  } catch (error) {
-    console.error("WebSocket auth failed:", error);
-    ws.close(1011, "Authentication failed");
-  }
+
+      const authenticated = await authenticateRequestToken(parsed.token);
+      if (!authenticated?.user) {
+        ws.close(1008, "Invalid token");
+        return;
+      }
+
+      clients.set(ws, {
+        authType: authenticated.authType,
+        role: "client",
+        userId: authenticated.user.id,
+      });
+
+      ws.on("message", handleMessage);
+
+      ws.on("close", () => {
+        const disconnectedClient = clients.get(ws);
+        clients.delete(ws);
+
+        if (disconnectedClient?.role === "agent") {
+          broadcastToUser(disconnectedClient.userId, { type: "source:updated" });
+        }
+      });
+    } catch (error) {
+      console.error("WebSocket auth failed:", error);
+      ws.close(1011, "Authentication failed");
+    }
+  });
 });
 
 app.use(express.json({ limit: '50mb' }));

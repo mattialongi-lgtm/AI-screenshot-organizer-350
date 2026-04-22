@@ -4,14 +4,13 @@
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { 
-  Search, 
-  Sparkles, 
-  Moon, 
-  Sun, 
-  Plus, 
+import {
+  Search,
+  Sparkles,
+  Moon,
+  Sun,
+  Plus,
   Loader2,
-  Database,
   ShieldAlert,
   LayoutGrid
 } from 'lucide-react';
@@ -20,18 +19,10 @@ import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
 import { ScreenshotMetadata, Category, ChatMessage } from './types';
-import { 
-  getAllScreenshots, 
-  saveScreenshot, 
-  deleteScreenshot, 
-  updateScreenshot 
-} from './lib/db';
-import { 
-  analyzeScreenshot, 
+import {
   analyzeStoredScreenshot,
-  generateEmbedding, 
-  askScreenshots, 
-  isMockMode 
+  askScreenshots,
+  isMockMode
 } from './lib/ai/openai';
 import { keywordSearch, semanticSearch } from './lib/search';
 
@@ -45,7 +36,7 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-import { supabase, isSupabaseConfigured, useSupabaseAuth, getAccessToken } from './lib/supabase';
+import { supabase, useSupabaseAuth, getAccessToken } from './lib/supabase';
 import { AuthButton } from './components/AuthButton';
 import { SourcesPage } from './pages/Sources';
 import { Cloud } from 'lucide-react';
@@ -87,22 +78,17 @@ export default function App() {
     let ws: WebSocket | null = null;
     let cancelled = false;
 
-    const getWsUrl = async () => {
-      const token = await getAccessToken();
-      if (!token) {
-        return null;
-      }
-
-      return buildWebSocketUrl(token);
-    };
-
     const connect = async () => {
-      const wsUrl = await getWsUrl();
-      if (!wsUrl || cancelled) {
+      const token = await getAccessToken();
+      if (!token || cancelled) {
         return;
       }
 
-      ws = new WebSocket(wsUrl);
+      ws = new WebSocket(buildWebSocketUrl());
+
+      ws.onopen = () => {
+        ws?.send(JSON.stringify({ type: "auth", token }));
+      };
 
       ws.onmessage = (event) => {
         try {
@@ -128,72 +114,64 @@ export default function App() {
     };
   }, [user?.id]);
 
-  // Load data from IndexedDB or Supabase
   useEffect(() => {
-    if (user && isSupabaseConfigured) {
-      // Subscribe to Supabase real-time updates for this user
-      const channel = supabase
-        .channel('screenshots-changes')
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'screenshots',
-            filter: `user_id=eq.${user.id}`
-          },
-          (payload) => {
-            console.log("Real-time event received:", payload.eventType, (payload.new as any)?.id);
-            if (payload.eventType === 'INSERT') {
-              const newScreenshot = mapDbToScreenshot(payload.new);
-              setScreenshots(prev => {
-                if (prev.some(s => s.id === newScreenshot.id)) return prev;
-                return [newScreenshot, ...prev];
-              });
-            } else if (payload.eventType === 'UPDATE') {
-              const updated = mapDbToScreenshot(payload.new);
-              console.log("Updated screenshot from real-time:", updated.id, "isAnalyzed:", updated.isAnalyzed);
-              setScreenshots(prev => prev.map(s => String(s.id) === String(updated.id) ? { ...s, ...updated } : s));
-            } else if (payload.eventType === 'DELETE') {
-              const deletedId = payload.old.id;
-              setScreenshots(prev => prev.filter(s => String(s.id) !== String(deletedId)));
-            }
-          }
-        )
-        .subscribe();
+    if (!user) return;
 
-      // Initial fetch from Supabase
-      const fetchCloudScreenshots = async () => {
-        const { data, error } = await supabase
-          .from('screenshots')
-          .select('*, tags(*)')
-          .eq('user_id', user.id)
-          .order('upload_date', { ascending: false });
-        
-        if (data && !error) {
-          const mappedData = data.map(mapDbToScreenshot);
-          setScreenshots(prev => {
-            const combined = [...mappedData];
-            prev.forEach(p => {
-              if (!combined.some(c => c.id === p.id)) combined.push(p);
+    const channel = supabase
+      .channel('screenshots-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'screenshots',
+          filter: `user_id=eq.${user.id}`
+        },
+        (payload) => {
+          if (payload.eventType === 'INSERT') {
+            const newScreenshot = mapDbToScreenshot(payload.new);
+            setScreenshots(prev => {
+              if (prev.some(s => s.id === newScreenshot.id)) return prev;
+              return [newScreenshot, ...prev];
             });
-            return combined.sort((a, b) => 
-              new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-            );
-          });
-          setLoading(false);
+          } else if (payload.eventType === 'UPDATE') {
+            const updated = mapDbToScreenshot(payload.new);
+            setScreenshots(prev => prev.map(s => String(s.id) === String(updated.id) ? { ...s, ...updated } : s));
+          } else if (payload.eventType === 'DELETE') {
+            const deletedId = payload.old.id;
+            setScreenshots(prev => prev.filter(s => String(s.id) !== String(deletedId)));
+          }
         }
-      };
+      )
+      .subscribe();
 
-      fetchCloudScreenshots();
+    const fetchCloudScreenshots = async () => {
+      const { data, error } = await supabase
+        .from('screenshots')
+        .select('*, tags(*)')
+        .eq('user_id', user.id)
+        .order('upload_date', { ascending: false });
 
-      return () => {
-        supabase.removeChannel(channel);
-      };
-    } else {
-      // Load from IndexedDB
-      loadLocalData();
-    }
+      if (data && !error) {
+        const mappedData = data.map(mapDbToScreenshot);
+        setScreenshots(prev => {
+          const combined = [...mappedData];
+          prev.forEach(p => {
+            if (!combined.some(c => c.id === p.id)) combined.push(p);
+          });
+          return combined.sort((a, b) =>
+            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+          );
+        });
+        setLoading(false);
+      }
+    };
+
+    fetchCloudScreenshots();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [user]);
 
   useEffect(() => {
@@ -204,18 +182,6 @@ export default function App() {
     }
   }, [darkMode]);
 
-  const loadLocalData = async () => {
-    setLoading(true);
-    try {
-      const data = await getAllScreenshots();
-      setScreenshots(data.sort((a, b) => b.createdAt - a.createdAt));
-    } catch (err) {
-      console.error("Failed to load screenshots:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleUpload = async (files: File[]) => {
     setIsUploading(true);
     for (const file of files) {
@@ -223,7 +189,6 @@ export default function App() {
       const newScreenshot: ScreenshotMetadata = {
         createdAt: Date.now(),
         filename: file.name,
-        imageBlob: blob,
         ocrText: '',
         summary: '',
         category: 'Other',
@@ -235,49 +200,36 @@ export default function App() {
       };
 
       try {
-        if (user && isSupabaseConfigured) {
-          // Sanitize filename for Supabase Storage (removes spaces, special characters)
-          const safeFilename = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-          const fileName = `${user.id}/${Date.now()}_${safeFilename}`;
-          const { data: uploadData, error: uploadError } = await supabase.storage
-            .from('screenshots')
-            .upload(fileName, blob);
+        const safeFilename = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+        const fileName = `${user!.id}/${Date.now()}_${safeFilename}`;
+        const { error: uploadError } = await supabase.storage
+          .from('screenshots')
+          .upload(fileName, blob);
 
-          if (uploadError) throw uploadError;
+        if (uploadError) throw uploadError;
 
-          // Align with database schema: store full path in filename
-          newScreenshot.filename = fileName;
+        newScreenshot.filename = fileName;
 
-          // Save to Supabase DB (mapScreenshotToDb handles standard fields)
-          const dbDataToInsert = mapScreenshotToDb(newScreenshot);
-          const { data: dbData, error: dbError } = await supabase
-            .from('screenshots')
-            .insert([{
-              ...dbDataToInsert,
-              filename: fileName,
-              storage_path: fileName,
-              original_name: file.name,
-              user_id: user.id,
-              upload_date: new Date().toISOString()
-            }])
-            .select()
-            .single();
+        const dbDataToInsert = mapScreenshotToDb(newScreenshot);
+        const { data: dbData, error: dbError } = await supabase
+          .from('screenshots')
+          .insert([{
+            ...dbDataToInsert,
+            filename: fileName,
+            storage_path: fileName,
+            original_name: file.name,
+            user_id: user!.id,
+            upload_date: new Date().toISOString()
+          }])
+          .select()
+          .single();
 
-          if (dbError) throw dbError;
-          if (dbData) {
-            newScreenshot.id = dbData.id;
-            console.log("Screenshot saved to Supabase:", dbData.id);
-            // Add to state immediately for responsiveness
-            setScreenshots(prev => [newScreenshot, ...prev]);
-          }
-        } else {
-          const id = await saveScreenshot(newScreenshot);
-          newScreenshot.id = id;
+        if (dbError) throw dbError;
+        if (dbData) {
+          newScreenshot.id = dbData.id;
           setScreenshots(prev => [newScreenshot, ...prev]);
         }
-        
-        console.log("Starting analysis for:", newScreenshot.id);
-        // Start analysis
+
         processAnalysis(newScreenshot);
       } catch (err: any) {
         console.error("Upload failed:", err);
@@ -288,59 +240,10 @@ export default function App() {
   };
 
   const processAnalysis = async (screenshot: ScreenshotMetadata) => {
-    if (screenshot.isAnalyzed) {
-      console.log("DEBUG: Screenshot already analyzed:", screenshot.id);
-      return;
-    }
+    if (screenshot.isAnalyzed || !screenshot.id) return;
 
     try {
-      console.log("DEBUG: processAnalysis started for:", screenshot.id);
-
-      if (user && isSupabaseConfigured && screenshot.id) {
-        console.log("DEBUG: Using backend stored analysis for:", screenshot.id);
-        const result = await analyzeStoredScreenshot(screenshot.id);
-        const updated: ScreenshotMetadata = {
-          ...screenshot,
-          category: result.category,
-          summary: result.summary,
-          ocrText: result.ocr_text,
-          tags: result.tags,
-          entities: result.entities,
-          isSensitive: result.safety?.contains_sensitive ?? false,
-          safetyReason: result.safety?.reason ?? '',
-          embedding: result.embedding ?? screenshot.embedding,
-          isAnalyzed: true,
-          lastAnalyzedAt: Date.now()
-        };
-
-        if (result.saveWarnings && result.saveWarnings.length > 0) {
-          console.warn("DEBUG: Backend analysis saved with warnings:", result.saveWarnings);
-        }
-
-        setScreenshots(prev => prev.map(s => String(s.id) === String(updated.id) ? updated : s));
-        return;
-      }
-
-      let blob = screenshot.imageBlob;
-      if (!blob && screenshot.imageUrl) {
-        console.log("DEBUG: Fetching blob from URL:", screenshot.imageUrl);
-        const response = await fetch(screenshot.imageUrl);
-        blob = await response.blob();
-      }
-
-      if (!blob) {
-        throw new Error("No image data available for analysis");
-      }
-
-      console.log("DEBUG: Calling analyzeScreenshot...");
-      const result = await analyzeScreenshot(blob);
-      console.log("DEBUG: analyzeScreenshot result:", result.category);
-
-      console.log("DEBUG: Calling generateEmbedding...");
-      const embedding = await generateEmbedding(`${result.summary} ${result.ocr_text}`);
-      console.log("DEBUG: generateEmbedding complete");
-
-      // Map AnalysisResult fields to ScreenshotMetadata fields explicitly
+      const result = await analyzeStoredScreenshot(screenshot.id);
       const updated: ScreenshotMetadata = {
         ...screenshot,
         category: result.category,
@@ -350,55 +253,16 @@ export default function App() {
         entities: result.entities,
         isSensitive: result.safety?.contains_sensitive ?? false,
         safetyReason: result.safety?.reason ?? '',
-        embedding,
+        embedding: result.embedding ?? screenshot.embedding,
         isAnalyzed: true,
         lastAnalyzedAt: Date.now()
       };
-      
-      console.log("DEBUG: Analysis successful for:", updated.id, "Summary:", result.summary);
-      
-      // Update state immediately with strict ID comparison
-      setScreenshots(prev => prev.map(s => String(s.id) === String(updated.id) ? updated : s));
 
-      if (user && isSupabaseConfigured && updated.id) {
-        console.log("DEBUG: Updating Supabase for:", updated.id);
-        // Only update analysis-related columns to avoid overwriting unrelated fields
-        const analysisUpdate = {
-          category: updated.category,
-          summary: updated.summary,
-          ocr_text: updated.ocrText,
-          entities: updated.entities,
-          embedding: updated.embedding,
-          is_sensitive: updated.isSensitive ? 1 : 0,
-          is_analyzed: 1,
-          safety_reason: updated.safetyReason,
-          last_analyzed_at: new Date(updated.lastAnalyzedAt!).toISOString(),
-        };
-        const { error: dbError } = await supabase
-          .from('screenshots')
-          .update(analysisUpdate)
-          .eq('id', updated.id)
-          .eq('user_id', user.id);
-        
-        if (dbError) {
-          console.error("DEBUG: Supabase update error:", dbError);
-        } else {
-          console.log("DEBUG: Supabase update success for:", updated.id);
-          if (updated.tags && updated.tags.length > 0) {
-            // Delete old tags first just in case
-            await supabase.from('tags').delete().eq('screenshot_id', updated.id);
-            const tagInserts = updated.tags.map(t => ({ screenshot_id: updated.id, tag: t }));
-            await supabase.from('tags').insert(tagInserts);
-          }
-        }
-      } else {
-        console.log("DEBUG: Updating local DB for:", updated.id);
-        await updateScreenshot(updated);
-      }
+      setScreenshots(prev => prev.map(s => String(s.id) === String(updated.id) ? updated : s));
     } catch (err: any) {
-      console.error("DEBUG: processAnalysis FAILED for screenshot:", screenshot.id, err);
+      console.error("processAnalysis failed for:", screenshot.id, err);
       alert(`Analysis Error: ${err.message || JSON.stringify(err)}`);
-      const failed = { ...screenshot, isAnalyzed: false, summary: "Analysis failed. See console for details." };
+      const failed = { ...screenshot, isAnalyzed: false, summary: "Analysis failed." };
       setScreenshots(prev => prev.map(s => String(s.id) === String(failed.id) ? failed : s));
     }
   };
@@ -409,49 +273,39 @@ export default function App() {
     }
 
     try {
-      if (user && isSupabaseConfigured) {
-        const { data, error: lookupError } = await supabase
+      const { data, error: lookupError } = await supabase
+        .from('screenshots')
+        .select('storage_path')
+        .eq('id', id)
+        .eq('user_id', user!.id)
+        .maybeSingle();
+
+      if (lookupError) throw lookupError;
+
+      const { error: tagsDeleteError } = await supabase
+        .from('tags')
+        .delete()
+        .eq('screenshot_id', id);
+
+      if (tagsDeleteError) throw tagsDeleteError;
+
+      if (data?.storage_path) {
+        const { error: storageError } = await supabase.storage
           .from('screenshots')
-          .select('storage_path')
-          .eq('id', id)
-          .eq('user_id', user.id)
-          .maybeSingle();
+          .remove([data.storage_path]);
 
-        if (lookupError) {
-          throw lookupError;
+        if (storageError) {
+          console.warn('Storage delete warning:', storageError);
         }
-
-        const { error: tagsDeleteError } = await supabase
-          .from('tags')
-          .delete()
-          .eq('screenshot_id', id);
-
-        if (tagsDeleteError) {
-          throw tagsDeleteError;
-        }
-
-        if (data?.storage_path) {
-          const { error: storageError } = await supabase.storage
-            .from('screenshots')
-            .remove([data.storage_path]);
-
-          if (storageError) {
-            console.warn('Storage delete warning:', storageError);
-          }
-        }
-
-        const { error: deleteError } = await supabase
-          .from('screenshots')
-          .delete()
-          .eq('id', id)
-          .eq('user_id', user.id);
-
-        if (deleteError) {
-          throw deleteError;
-        }
-      } else {
-        await deleteScreenshot(id as number);
       }
+
+      const { error: deleteError } = await supabase
+        .from('screenshots')
+        .delete()
+        .eq('id', id)
+        .eq('user_id', user!.id);
+
+      if (deleteError) throw deleteError;
 
       setScreenshots(prev => prev.filter(s => String(s.id) !== String(id)));
       if (String(selectedScreenshot?.id) === String(id)) {
@@ -758,20 +612,13 @@ export default function App() {
           const s = screenshots.find(sc => sc.id === id);
           if (s) {
             const updated = { ...s, tags };
-            if (user && isSupabaseConfigured && typeof id === 'string') {
-              const dbUpdate = mapScreenshotToDb(updated);
-              // Remove fields that shouldn't be updated or cause issues
-              delete dbUpdate.id; 
-              
-              await supabase
-                .from('screenshots')
-                .update(dbUpdate)
-                .eq('id', id)
-                .eq('user_id', user.id);
-            } else {
-              await updateScreenshot(updated);
-              setScreenshots(prev => prev.map(sc => sc.id === id ? updated : sc));
-            }
+            const dbUpdate = mapScreenshotToDb(updated);
+            delete dbUpdate.id;
+            await supabase
+              .from('screenshots')
+              .update(dbUpdate)
+              .eq('id', id)
+              .eq('user_id', user!.id);
           }
         }}
       />

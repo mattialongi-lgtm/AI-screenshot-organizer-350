@@ -1,0 +1,46 @@
+{
+  "generatedAt": "2026-04-22T00:37:04.027Z",
+  "product": "ScreenSort",
+  "trigger": "Weekly scheduled digest job for users with screenshot activity in the last 7 days",
+  "user": {
+    "firstName": "Sarah",
+    "persona": "Expense Tracker"
+  },
+  "metrics": {
+    "screenshotsAnalyzed": 16,
+    "categoriesFound": 3,
+    "topCategory": {
+      "name": "Receipt",
+      "count": 14
+    },
+    "entities": {
+      "amounts": 15,
+      "dates": 16,
+      "urls": 1,
+      "orderIds": 7
+    },
+    "receiptInsight": {
+      "receiptCount": 15,
+      "total": "$867.00"
+    }
+  },
+  "rediscovery": {
+    "reason": "Older screenshot surfaced because it is semantically related to this week's receipt and billing activity.",
+    "summary": "March vendor invoice screenshot"
+  },
+  "email": {
+    "subject": "Your ScreenSort weekly summary is ready",
+    "headline": "16 screenshots organized this week",
+    "intro": "Hi Sarah, here is your weekly ScreenSort summary.",
+    "highlights": [
+      "Top category: Receipt (14 screenshots)",
+      "Key entities found: 15 amounts, 16 dates, 1 links, 7 order IDs",
+      "Most useful insight: You saved 15 receipt-related amounts totaling $867.00 this week."
+    ],
+    "nextActions": [
+      "Filter screenshots by amount to review expenses in one view",
+      "Search your library by concept, not filename",
+      "Ask AI chat what expenses or confirmations you captured this week"
+    ]
+  }
+}

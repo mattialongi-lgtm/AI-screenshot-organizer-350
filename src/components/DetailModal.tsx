@@ -23,7 +23,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
 }) => {
   if (!screenshot) return null;
 
-  const imageUrl = screenshot.imageUrl || (screenshot.imageBlob ? URL.createObjectURL(screenshot.imageBlob) : '');
+  const imageUrl = screenshot.imageUrl ?? '';
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);

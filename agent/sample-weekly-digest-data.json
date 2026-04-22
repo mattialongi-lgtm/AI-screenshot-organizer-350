@@ -1,0 +1,216 @@
+{
+  "user": {
+    "firstName": "Sarah",
+    "persona": "Expense Tracker"
+  },
+  "screenshots": [
+    {
+      "createdAt": "2026-04-16T09:10:00Z",
+      "category": "Receipt",
+      "summary": "Coffee shop receipt for client meeting",
+      "entities": {
+        "amounts": ["$18.40"],
+        "dates": ["2026-04-16"],
+        "urls": [],
+        "emails": [],
+        "phones": [],
+        "order_ids": ["A1028"]
+      }
+    },
+    {
+      "createdAt": "2026-04-16T14:35:00Z",
+      "category": "Receipt",
+      "summary": "Rideshare receipt to downtown office",
+      "entities": {
+        "amounts": ["$26.15"],
+        "dates": ["2026-04-16"],
+        "urls": [],
+        "emails": [],
+        "phones": [],
+        "order_ids": ["TRP812"]
+      }
+    },
+    {
+      "createdAt": "2026-04-17T11:20:00Z",
+      "category": "Receipt",
+      "summary": "Lunch receipt from strategy workshop",
+      "entities": {
+        "amounts": ["$32.70"],
+        "dates": ["2026-04-17"],
+        "urls": [],
+        "emails": [],
+        "phones": [],
+        "order_ids": []
+      }
+    },
+    {
+      "createdAt": "2026-04-17T18:40:00Z",
+      "category": "Receipt",
+      "summary": "Parking receipt for client site visit",
+      "entities": {
+        "amounts": ["$14.00"],
+        "dates": ["2026-04-17"],
+        "urls": [],
+        "emails": [],
+        "phones": [],
+        "order_ids": []
+      }
+    },
+    {
+      "createdAt": "2026-04-18T08:25:00Z",
+      "category": "Receipt",
+      "summary": "Office supply store receipt",
+      "entities": {
+        "amounts": ["$47.80"],
+        "dates": ["2026-04-18"],
+        "urls": [],
+        "emails": [],
+        "phones": [],
+        "order_ids": ["OFF204"]
+      }
+    },
+    {
+      "createdAt": "2026-04-18T16:50:00Z",
+      "category": "Receipt",
+      "summary": "Hotel receipt for conference stay",
+      "entities": {
+        "amounts": ["$88.95"],
+        "dates": ["2026-04-18"],
+        "urls": [],
+        "emails": [],
+        "phones": [],
+        "order_ids": ["HTL330"]
+      }
+    },
+    {
+      "createdAt": "2026-04-19T09:05:00Z",
+      "category": "Receipt",
+      "summary": "Printer ink purchase receipt",
+      "entities": {
+        "amounts": ["$41.00"],
+        "dates": ["2026-04-19"],
+        "urls": [],
+        "emails": [],
+        "phones": [],
+        "order_ids": []
+      }
+    },
+    {
+      "createdAt": "2026-04-19T13:15:00Z",
+      "category": "Receipt",
+      "summary": "Train ticket receipt for campus visit",
+      "entities": {
+        "amounts": ["$29.50"],
+        "dates": ["2026-04-19"],
+        "urls": [],
+        "emails": [],
+        "phones": [],
+        "order_ids": []
+      }
+    },
+    {
+      "createdAt": "2026-04-20T10:10:00Z",
+      "category": "Receipt",
+      "summary": "Restaurant receipt after investor lunch",
+      "entities": {
+        "amounts": ["$24.60"],
+        "dates": ["2026-04-20"],
+        "urls": [],
+        "emails": [],
+        "phones": [],
+        "order_ids": []
+      }
+    },
+    {
+      "createdAt": "2026-04-20T16:25:00Z",
+      "category": "Receipt",
+      "summary": "Cloud software renewal confirmation",
+      "entities": {
+        "amounts": ["$24.90"],
+        "dates": ["2026-04-20"],
+        "urls": ["https://billing.example.com"],
+        "emails": [],
+        "phones": [],
+        "order_ids": ["SW991"]
+      }
+    },
+    {
+      "createdAt": "2026-04-21T09:45:00Z",
+      "category": "Receipt",
+      "summary": "Taxi receipt from airport",
+      "entities": {
+        "amounts": ["$21.00"],
+        "dates": ["2026-04-21"],
+        "urls": [],
+        "emails": [],
+        "phones": [],
+        "order_ids": []
+      }
+    },
+    {
+      "createdAt": "2026-04-21T12:00:00Z",
+      "category": "Receipt",
+      "summary": "Client lunch receipt",
+      "entities": {
+        "amounts": ["$33.00"],
+        "dates": ["2026-04-21"],
+        "urls": [],
+        "emails": [],
+        "phones": [],
+        "order_ids": []
+      }
+    },
+    {
+      "createdAt": "2026-04-21T15:30:00Z",
+      "category": "Receipt",
+      "summary": "Shipping label purchase confirmation",
+      "entities": {
+        "amounts": ["$25.00"],
+        "dates": ["2026-04-21"],
+        "urls": [],
+        "emails": [],
+        "phones": [],
+        "order_ids": ["SHIP47"]
+      }
+    },
+    {
+      "createdAt": "2026-04-22T09:20:00Z",
+      "category": "Receipt",
+      "summary": "Coworking day pass receipt",
+      "entities": {
+        "amounts": ["$20.00"],
+        "dates": ["2026-04-22"],
+        "urls": [],
+        "emails": [],
+        "phones": [],
+        "order_ids": []
+      }
+    },
+    {
+      "createdAt": "2026-04-18T09:20:00Z",
+      "category": "Document",
+      "summary": "March vendor invoice screenshot",
+      "entities": {
+        "amounts": ["$420.00"],
+        "dates": ["2026-03-31"],
+        "urls": [],
+        "emails": ["billing@vendor.com"],
+        "phones": [],
+        "order_ids": ["INV-MARCH-31"]
+      }
+    },
+    {
+      "createdAt": "2026-04-18T19:10:00Z",
+      "category": "Chat",
+      "summary": "Team Slack message confirming reimbursement deadline",
+      "entities": {
+        "amounts": [],
+        "dates": ["2026-04-25"],
+        "urls": [],
+        "emails": [],
+        "phones": [],
+        "order_ids": []
+      }
+    }
+  ]
+}

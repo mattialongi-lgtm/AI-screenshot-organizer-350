@@ -21,7 +21,7 @@ export const ScreenshotCard: React.FC<ScreenshotCardProps> = ({
   onDelete, 
   onReanalyze 
 }) => {
-  const imageUrl = screenshot.imageUrl || (screenshot.imageBlob ? URL.createObjectURL(screenshot.imageBlob) : '');
+  const imageUrl = screenshot.imageUrl ?? '';
 
   return (
     <motion.div

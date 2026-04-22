@@ -27,12 +27,11 @@ export const getApiBaseUrl = () => {
   return API_BASE_URL || window.location.origin;
 };
 
-export const buildWebSocketUrl = (token: string) => {
+export const buildWebSocketUrl = () => {
   const baseUrl = API_BASE_URL
     ? new URL(API_BASE_URL)
     : new URL(window.location.origin);
 
   baseUrl.protocol = baseUrl.protocol === "https:" ? "wss:" : "ws:";
-  baseUrl.searchParams.set("token", token);
   return baseUrl.toString();
 };

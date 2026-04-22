@@ -5,19 +5,10 @@
 
 import React from 'react';
 import { User as UserIcon, LogOut, LogIn } from 'lucide-react';
-import { signInWithGoogle, logout, isSupabaseConfigured, useSupabaseAuth } from '../lib/supabase';
+import { signInWithGoogle, logout, useSupabaseAuth } from '../lib/supabase';
 
 export const AuthButton: React.FC = () => {
   const { user, loading } = useSupabaseAuth();
-
-  if (!isSupabaseConfigured) {
-    return (
-      <div className="flex items-center gap-2 px-3 py-1.5 bg-white/[0.02] border border-white/10 opacity-50 cursor-not-allowed" title="Supabase not configured">
-        <UserIcon className="w-4 h-4 text-muted" />
-        <span className="mono-label text-[10px]">Local Mode</span>
-      </div>
-    );
-  }
 
   if (loading) {
     return (

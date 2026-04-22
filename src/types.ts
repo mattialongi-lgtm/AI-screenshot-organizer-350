@@ -50,7 +50,6 @@ export interface ScreenshotMetadata {
   userId?: string;
   createdAt: number;
   filename: string;
-  imageBlob?: Blob;
   ocrText: string;
   summary: string;
   category: Category;
