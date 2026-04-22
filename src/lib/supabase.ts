@@ -14,22 +14,27 @@ export const supabase = createClient(
 
 export const useSupabaseAuth = () => {
   const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(isSupabaseConfigured);
 
   useEffect(() => {
-    // Check active sessions and sets the user
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null);
-      setLoading(false);
-    });
+    if (!isSupabaseConfigured) return;
 
-    // Listen for changes on auth state (logged in, signed out, etc.)
+    // Hard timeout: never block the UI more than 1.5 s waiting for Supabase
+    const timeout = setTimeout(() => {
+      setUser(null);
+      setLoading(false);
+    }, 1500);
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      clearTimeout(timeout);
       setUser(session?.user ?? null);
       setLoading(false);
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      clearTimeout(timeout);
+      subscription.unsubscribe();
+    };
   }, []);
 
   return { user, loading };

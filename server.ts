@@ -927,6 +927,33 @@ function broadcastToUser(userId: string, data: any) {
   });
 }
 
+// --- In-memory rate limiter ---
+const _rlStore = new Map<string, { count: number; resetAt: number }>();
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of _rlStore) {
+    if (now > entry.resetAt) _rlStore.delete(key);
+  }
+}, 5 * 60 * 1000);
+
+function rateLimit(prefix: string, limit: number, windowMs: number) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const userId = req.user?.id ?? req.ip ?? "anon";
+    const key = `${prefix}:${userId}`;
+    const now = Date.now();
+    const entry = _rlStore.get(key);
+    if (!entry || now > entry.resetAt) {
+      _rlStore.set(key, { count: 1, resetAt: now + windowMs });
+      return next();
+    }
+    if (entry.count >= limit) {
+      return res.status(429).json({ error: "Too many requests. Please try again later." });
+    }
+    entry.count++;
+    next();
+  };
+}
+
 wss.on("connection", (ws) => {
   // Require auth message within 5 seconds or close
   const authTimeout = setTimeout(() => {
@@ -1014,7 +1041,7 @@ wss.on("connection", (ws) => {
   });
 });
 
-app.use(express.json({ limit: '50mb' }));
+app.use(express.json({ limit: '10mb' }));
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
@@ -1024,6 +1051,16 @@ app.use((req, res, next) => {
 });
 
 // Multer Setup
+const ALLOWED_UPLOAD_MIME_TYPES = new Set([
+  "image/jpeg",
+  "image/jpg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+  "image/heic",
+  "image/bmp",
+]);
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, UPLOADS_DIR),
   filename: (req, file, cb) => {
@@ -1031,7 +1068,17 @@ const storage = multer.diskStorage({
     cb(null, uniqueSuffix + path.extname(file.originalname));
   },
 });
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (ALLOWED_UPLOAD_MIME_TYPES.has(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error(`File type not allowed: ${file.mimetype}. Upload JPEG, PNG, WebP, GIF, HEIC, or BMP images only.`));
+    }
+  },
+});
 
 app.get("/uploads/:filename", requireAuth, async (req, res) => {
   try {
@@ -1403,7 +1450,7 @@ async function persistAnalysisForScreenshot(params: {
   return { warnings, persistedColumns: Object.keys(updatePayload) };
 }
 
-app.post("/api/analyze", requireAuth, async (req, res) => {
+app.post("/api/analyze", requireAuth, rateLimit("analyze", 30, 15 * 60 * 1000), async (req, res) => {
   const requestId = createRequestId();
   const startedAt = Date.now();
 
@@ -1413,6 +1460,11 @@ app.post("/api/analyze", requireAuth, async (req, res) => {
     }
 
     const { image, mimeType, screenshotId } = req.body ?? {};
+
+    if (screenshotId !== undefined && (typeof screenshotId !== "string" || screenshotId.length > 100)) {
+      return res.status(400).json({ error: "Invalid screenshotId.", requestId });
+    }
+
     const normalizedMimeType = normalizeAnalyzeMimeType(mimeType);
     let buffer: Buffer;
     let storagePath: string | null = null;
@@ -1442,6 +1494,11 @@ app.post("/api/analyze", requireAuth, async (req, res) => {
     } else {
       if (!image || typeof image !== "string") {
         return res.status(400).json({ error: "No image data", requestId });
+      }
+
+      // ~7 MB base64 ≈ 5 MB decoded
+      if (image.length > 7 * 1024 * 1024) {
+        return res.status(413).json({ error: "Image payload too large. Maximum ~5 MB.", requestId });
       }
 
       const decodedImage = decodeBase64Image(image);
@@ -1510,11 +1567,12 @@ app.post("/api/analyze", requireAuth, async (req, res) => {
   }
 });
 
-app.post("/api/embed", requireAuth, async (req, res) => {
+app.post("/api/embed", requireAuth, rateLimit("embed", 60, 15 * 60 * 1000), async (req, res) => {
   const requestId = createRequestId();
   try {
     const { text } = req.body;
-    if (!text) return res.status(400).json({ error: "No text provided", requestId });
+    if (!text || typeof text !== "string") return res.status(400).json({ error: "No text provided", requestId });
+    if (text.length > 5000) return res.status(400).json({ error: "Text too long. Maximum 5000 characters.", requestId });
     const embedding = await generateEmbedding(text);
     res.json({ embedding, requestId });
   } catch (error) {
@@ -1528,7 +1586,7 @@ app.post("/api/embed", requireAuth, async (req, res) => {
   }
 });
 
-app.post("/api/ask", requireAuth, async (req, res) => {
+app.post("/api/ask", requireAuth, rateLimit("ask", 30, 15 * 60 * 1000), async (req, res) => {
   const requestId = createRequestId();
   const startedAt = Date.now();
 
@@ -1538,8 +1596,17 @@ app.post("/api/ask", requireAuth, async (req, res) => {
     }
 
     const { question, context, history } = req.body;
-    if (!question) {
+    if (!question || typeof question !== "string") {
       return res.status(400).json({ error: "No question provided", requestId });
+    }
+    if (question.length > 1000) {
+      return res.status(400).json({ error: "Question too long. Maximum 1000 characters.", requestId });
+    }
+    if (Array.isArray(context) && context.length > 50) {
+      return res.status(400).json({ error: "Too many context items. Maximum 50.", requestId });
+    }
+    if (Array.isArray(history) && history.length > 20) {
+      return res.status(400).json({ error: "Too many history items. Maximum 20.", requestId });
     }
 
     const contextText = buildAskContextText(context);
@@ -1631,7 +1698,7 @@ app.get("/api/auth/google/url", requireAuth, (req, res) => {
     res.json({ url });
   } catch (error) {
     console.error("Failed to create Google OAuth URL:", error);
-    res.status(500).json({ error: error instanceof Error ? error.message : "Failed to create Google OAuth URL." });
+    res.status(500).json({ error: "Failed to create Google OAuth URL. Check server configuration." });
   }
 });
 
@@ -1733,7 +1800,7 @@ app.get("/api/sources", requireAuth, async (req, res) => {
     .eq('user_id', req.user.id)
     .eq('type', GOOGLE_SOURCE_TYPE);
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return res.status(500).json({ error: "Failed to load sources." });
 
   res.json(sources.map((source: any) => serializeCloudSource(source, req.user!.id)));
 });
@@ -1752,7 +1819,7 @@ app.post("/api/sources/:id/settings", requireAuth, async (req, res) => {
     .select('id')
     .maybeSingle();
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return res.status(500).json({ error: "Failed to update source settings." });
   if (!updatedSource) return res.status(404).json({ error: "Source not found" });
 
   res.json({ success: true });
@@ -1786,12 +1853,12 @@ app.post("/api/sources/:id/disconnect", requireAuth, async (req, res) => {
     .eq('id', id)
     .eq('user_id', req.user.id);
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return res.status(500).json({ error: "Failed to disconnect source." });
   res.json({ success: true });
 });
 
 // Sync Logic
-app.post("/api/sync", requireAuth, async (req, res) => {
+app.post("/api/sync", requireAuth, rateLimit("sync", 5, 15 * 60 * 1000), async (req, res) => {
   if (!req.user) return res.status(401).json({ error: "Authentication required" });
 
   const { sourceId } = req.body ?? {};
@@ -1806,7 +1873,7 @@ app.post("/api/sync", requireAuth, async (req, res) => {
   }
 
   const { data: sources, error } = await sourcesQuery;
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return res.status(500).json({ error: "Failed to load sources for sync." });
 
   let totalSynced = 0;
   let results: any[] = [];
@@ -1982,7 +2049,17 @@ app.post("/api/sync", requireAuth, async (req, res) => {
 });
 
 // API Routes
-app.post("/api/upload", requireAuth, upload.single("screenshot"), async (req, res) => {
+app.post("/api/upload", requireAuth, rateLimit("upload", 20, 15 * 60 * 1000), (req, res, next) => {
+  upload.single("screenshot")(req, res, (err) => {
+    if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
+      return res.status(413).json({ error: "File too large. Maximum 10 MB per upload." });
+    }
+    if (err) {
+      return res.status(400).json({ error: err instanceof Error ? err.message : "Invalid file." });
+    }
+    next();
+  });
+}, async (req, res) => {
   try {
     if (!req.user) return res.status(401).json({ error: "Authentication required" });
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
@@ -2047,15 +2124,16 @@ app.get("/api/screenshots", requireAuth, async (req, res) => {
     .eq('user_id', req.user.id)
     .order('upload_date', { ascending: false });
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return res.status(500).json({ error: "Failed to load screenshots." });
   res.json(data);
 });
 
-app.post("/api/search", requireAuth, async (req, res) => {
+app.post("/api/search", requireAuth, rateLimit("search", 60, 15 * 60 * 1000), async (req, res) => {
   try {
     if (!req.user) return res.status(401).json({ error: "Authentication required" });
     const { query } = req.body;
-    if (!query) return res.status(400).json({ error: "No query provided" });
+    if (!query || typeof query !== "string") return res.status(400).json({ error: "No query provided" });
+    if (query.length > 500) return res.status(400).json({ error: "Query too long. Maximum 500 characters." });
     const queryEmbedding = await generateEmbedding(query);
 
     const { data: screenshots, error } = await supabase
@@ -2077,11 +2155,15 @@ app.post("/api/search", requireAuth, async (req, res) => {
   }
 });
 
-app.post("/api/chat", requireAuth, async (req, res) => {
+app.post("/api/chat", requireAuth, rateLimit("chat", 30, 15 * 60 * 1000), async (req, res) => {
   try {
     if (!req.user) return res.status(401).json({ error: "Authentication required" });
     const { message, contextIds } = req.body;
-    if (!message) return res.status(400).json({ error: "No message provided" });
+    if (!message || typeof message !== "string") return res.status(400).json({ error: "No message provided" });
+    if (message.length > 1000) return res.status(400).json({ error: "Message too long. Maximum 1000 characters." });
+    if (contextIds !== undefined && (!Array.isArray(contextIds) || contextIds.length > 20)) {
+      return res.status(400).json({ error: "contextIds must be an array of at most 20 items." });
+    }
 
     // Fetch context from DB
     const { data: contextScreenshots, error } = await supabase
