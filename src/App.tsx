@@ -3,13 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Search,
   Sparkles,
-  Moon,
-  Sun,
-  Plus,
   Loader2,
   ShieldAlert,
   LayoutGrid
@@ -54,8 +51,16 @@ function getScreenshotsByIds(
   ids: (string | number)[],
 ) {
   if (ids.length === 0) return [];
-  const wanted = new Set(ids.map((id) => String(id)));
-  return source.filter((screenshot) => screenshot.id != null && wanted.has(String(screenshot.id)));
+  const byId = new Map(
+    source
+      .filter((screenshot) => screenshot.id != null)
+      .map((screenshot) => [String(screenshot.id), screenshot]),
+  );
+
+  return ids.flatMap((id) => {
+    const screenshot = byId.get(String(id));
+    return screenshot ? [screenshot] : [];
+  });
 }
 
 export default function App() {
@@ -65,6 +70,8 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
+  const [semanticResultIds, setSemanticResultIds] = useState<(string | number)[] | null>(null);
+  const [semanticSearchQuery, setSemanticSearchQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState<Category | 'All'>('All');
   const [hasAmount, setHasAmount] = useState(false);
   const [hasUrl, setHasUrl] = useState(false);
@@ -73,6 +80,8 @@ export default function App() {
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [darkMode, setDarkMode] = useState(true);
+  const semanticSearchRequestId = useRef(0);
+  const isSemanticSearchActive = semanticResultIds !== null;
 
   // Connect to WebSocket for real-time analysis updates
   useEffect(() => {
@@ -282,44 +291,94 @@ export default function App() {
     }
   };
 
-  const filteredScreenshots = useMemo(() => {
-    let result = [...screenshots];
+  const resetSemanticSearch = (options?: { clearQuery?: boolean }) => {
+    semanticSearchRequestId.current += 1;
+    setSemanticResultIds(null);
+    setSemanticSearchQuery('');
+    setIsSearching(false);
+
+    if (options?.clearQuery) {
+      setSearchQuery('');
+    }
+  };
+
+  const applyStructuredFilters = (source: ScreenshotMetadata[]) => {
+    let result = [...source];
 
     if (activeCategory !== 'All') {
-      result = result.filter(s => s.category === activeCategory);
+      result = result.filter((screenshot) => screenshot.category === activeCategory);
     }
 
     if (hasAmount) {
-      result = result.filter(s => s.entities.amounts.length > 0);
+      result = result.filter((screenshot) => screenshot.entities.amounts.length > 0);
     }
 
     if (hasUrl) {
-      result = result.filter(s => s.entities.urls.length > 0);
+      result = result.filter((screenshot) => screenshot.entities.urls.length > 0);
     }
 
-    if (searchQuery.trim()) {
+    return result;
+  };
+
+  const archiveScreenshots = useMemo(() => {
+    let result = applyStructuredFilters(screenshots);
+
+    if (searchQuery.trim() && !isSemanticSearchActive) {
       result = keywordSearch(searchQuery, result);
     }
 
     return result;
-  }, [screenshots, activeCategory, hasAmount, hasUrl, searchQuery]);
+  }, [screenshots, activeCategory, hasAmount, hasUrl, searchQuery, isSemanticSearchActive]);
+
+  const semanticScreenshots = useMemo(() => {
+    if (!semanticResultIds) {
+      return [];
+    }
+
+    return applyStructuredFilters(getScreenshotsByIds(screenshots, semanticResultIds));
+  }, [screenshots, semanticResultIds, activeCategory, hasAmount, hasUrl]);
+
+  const visibleScreenshots = useMemo(() => {
+    return isSemanticSearchActive ? semanticScreenshots : archiveScreenshots;
+  }, [archiveScreenshots, semanticScreenshots, isSemanticSearchActive]);
+
+  const handleSearchInputChange = (value: string) => {
+    setSearchQuery(value);
+
+    if (semanticSearchQuery && value.trim() !== semanticSearchQuery) {
+      resetSemanticSearch();
+    }
+  };
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!searchQuery.trim()) return;
-    
+    const query = searchQuery.trim();
+
+    if (!query) {
+      resetSemanticSearch({ clearQuery: true });
+      return;
+    }
+
+    const requestId = ++semanticSearchRequestId.current;
     setIsSearching(true);
     try {
-      const semanticResults = await semanticSearch(searchQuery, screenshots);
-      if (semanticResults.length > 0) {
-        // For simplicity, we just filter the list to these results
-        // In a real app, you might merge or show them separately
-        setScreenshots(semanticResults);
+      const semanticResults = await semanticSearch(query, screenshots);
+      if (requestId !== semanticSearchRequestId.current) {
+        return;
       }
+
+      setSemanticResultIds(
+        semanticResults
+          .map((screenshot) => screenshot.id)
+          .filter((id): id is string | number => id != null),
+      );
+      setSemanticSearchQuery(query);
     } catch (err) {
       console.error("Semantic search failed:", err);
     } finally {
-      setIsSearching(false);
+      if (requestId === semanticSearchRequestId.current) {
+        setIsSearching(false);
+      }
     }
   };
 
@@ -422,11 +481,20 @@ export default function App() {
             <input 
               type="text" 
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => handleSearchInputChange(e.target.value)}
               placeholder="Search by meaning, content, or context..."
-              className="w-full bg-transparent border-b border-white/10 rounded-none py-4 pl-8 pr-4 text-sm focus:border-accent focus:ring-0 transition-all placeholder:text-muted/50"
+              className="w-full bg-transparent border-b border-white/10 rounded-none py-4 pl-8 pr-20 text-sm focus:border-accent focus:ring-0 transition-all placeholder:text-muted/50"
             />
             {isSearching && <Loader2 className="absolute right-0 top-1/2 -translate-y-1/2 w-4 h-4 text-accent animate-spin" />}
+            {!isSearching && (searchQuery.trim() || isSemanticSearchActive) && (
+              <button
+                type="button"
+                onClick={() => resetSemanticSearch({ clearQuery: true })}
+                className="absolute right-0 top-1/2 -translate-y-1/2 mono-label text-[10px] text-accent hover:text-bone transition-colors"
+              >
+                Clear
+              </button>
+            )}
           </form>
 
           <div className="flex items-center gap-8 shrink-0">
@@ -494,39 +562,68 @@ export default function App() {
                   <Loader2 className="w-12 h-12 text-accent animate-spin" />
                   <span className="mono-label animate-pulse">Initializing Archive</span>
                 </div>
-              ) : filteredScreenshots.length === 0 ? (
-                <div className="h-[60vh] flex flex-col items-center justify-center text-center space-y-12">
-                  <div className="relative">
-                    <div className="w-40 h-40 border border-white/5 flex items-center justify-center rotate-45">
-                      <LayoutGrid className="w-16 h-16 text-white/10 -rotate-45" />
+              ) : visibleScreenshots.length === 0 ? (
+                screenshots.length === 0 ? (
+                  <div className="h-[60vh] flex flex-col items-center justify-center text-center space-y-12">
+                    <div className="relative">
+                      <div className="w-40 h-40 border border-white/5 flex items-center justify-center rotate-45">
+                        <LayoutGrid className="w-16 h-16 text-white/10 -rotate-45" />
+                      </div>
+                      <Sparkles className="absolute -top-4 -right-4 w-10 h-10 text-accent animate-pulse" />
                     </div>
-                    <Sparkles className="absolute -top-4 -right-4 w-10 h-10 text-accent animate-pulse" />
+                    <div className="space-y-4">
+                      <h2 className="text-5xl font-serif italic">Archive Empty</h2>
+                      <p className="text-muted font-light max-w-sm mx-auto">
+                        Your intelligence repository is currently void. Ingest screenshots to begin analysis.
+                      </p>
+                    </div>
+                    <button 
+                      onClick={() => (document.querySelector('input[type="file"]') as HTMLInputElement)?.click()}
+                      className="accent-button"
+                    >
+                      Ingest First Entry
+                    </button>
                   </div>
-                  <div className="space-y-4">
-                    <h2 className="text-5xl font-serif italic">Archive Empty</h2>
-                    <p className="text-muted font-light max-w-sm mx-auto">
-                      Your intelligence repository is currently void. Ingest screenshots to begin analysis.
-                    </p>
+                ) : (
+                  <div className="h-[60vh] flex flex-col items-center justify-center text-center space-y-8">
+                    <div className="relative">
+                      <div className="w-32 h-32 border border-white/5 flex items-center justify-center rotate-45">
+                        <Search className="w-12 h-12 text-white/10 -rotate-45" />
+                      </div>
+                    </div>
+                    <div className="space-y-4">
+                      <h2 className="text-5xl font-serif italic">
+                        {isSemanticSearchActive ? 'No Search Results' : 'No Matching Screenshots'}
+                      </h2>
+                      <p className="text-muted font-light max-w-md mx-auto">
+                        {isSemanticSearchActive
+                          ? 'No screenshots matched that semantic search after applying your current filters. Clear search or relax filters to return to the full archive.'
+                          : 'No screenshots match the current keyword query or filters. Adjust the search text or filters to expand the archive again.'}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => resetSemanticSearch({ clearQuery: true })}
+                      className="accent-button"
+                    >
+                      Clear Search
+                    </button>
                   </div>
-                  <button 
-                    onClick={() => (document.querySelector('input[type="file"]') as HTMLInputElement)?.click()}
-                    className="accent-button"
-                  >
-                    Ingest First Entry
-                  </button>
-                </div>
+                )
               ) : (
                 <div className="space-y-12">
                   <div className="flex items-end justify-between border-b border-white/5 pb-8">
                     <h2 className="text-6xl font-serif italic leading-none">
-                      Collection <span className="text-accent text-2xl align-top">({filteredScreenshots.length})</span>
+                      {isSemanticSearchActive ? 'Search Results' : 'Collection'} <span className="text-accent text-2xl align-top">({visibleScreenshots.length})</span>
                     </h2>
-                    <div className="mono-label">Sorted by Recency</div>
+                    <div className="mono-label">
+                      {isSemanticSearchActive ? `Semantic: ${semanticSearchQuery}` : 'Sorted by Recency'}
+                    </div>
                   </div>
                   
                   <div className="editorial-grid">
                     <AnimatePresence mode="popLayout">
-                      {filteredScreenshots.map((s, idx) => (
+                      {visibleScreenshots.map((s, idx) => (
                         <motion.div
                           key={s.id}
                           initial={{ opacity: 0, y: 20 }}
