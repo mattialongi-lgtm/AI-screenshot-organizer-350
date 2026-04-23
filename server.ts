@@ -8,6 +8,8 @@ import fs from "fs";
 import OpenAI from "openai";
 import { fileURLToPath } from "url";
 import crypto from "crypto";
+import { buildWeeklyDigest } from "./src/server/weeklyDigest";
+import { isResendConfigured, sendWeeklyDigestEmail } from "./src/server/resendEmail";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -65,6 +67,10 @@ wss.on("error", (err: NodeJS.ErrnoException) => {
 const googleClientId = process.env.GOOGLE_CLIENT_ID;
 const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
 const configuredFrontendAppUrl = normalizeUrl(process.env.APP_URL);
+const configuredFrontendCorsOrigins = (process.env.FRONTEND_CORS_ORIGINS ?? "")
+  .split(",")
+  .map((value) => normalizeUrl(value))
+  .filter((value): value is string => Boolean(value));
 const configuredApiPublicUrl = normalizeUrl(process.env.API_PUBLIC_URL);
 const configuredGoogleRedirectUri = normalizeUrl(process.env.GOOGLE_OAUTH_REDIRECT_URI);
 const oauthStateSecret = process.env.GOOGLE_OAUTH_STATE_SECRET;
@@ -81,6 +87,7 @@ if (!oauthStateSecret || !tokenEncryptionSecret) {
 }
 const openaiApiKey = process.env.OPENAI_API_KEY;
 const openaiApiKeySource = process.env.OPENAI_API_KEY ? "OPENAI_API_KEY" : null;
+const weeklyDigestCronSecret = process.env.WEEKLY_DIGEST_CRON_SECRET;
 const OPENAI_ANALYSIS_MODEL = process.env.OPENAI_ANALYSIS_MODEL || "gpt-4.1-mini";
 const OPENAI_CHAT_MODEL = process.env.OPENAI_CHAT_MODEL || "gpt-4.1-mini";
 const OPENAI_EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small";
@@ -109,6 +116,8 @@ const DEFAULT_SOURCE_SETTINGS = {
   intervalMinutes: 15,
 } as const;
 const GOOGLE_SOURCE_TYPE = "google_drive";
+const CORS_ALLOWED_METHODS = ["GET", "POST", "DELETE", "OPTIONS"] as const;
+const CORS_ALLOWED_HEADERS = ["Authorization", "Content-Type"] as const;
 
 declare global {
   namespace Express {
@@ -153,6 +162,10 @@ type ConnectedClient = {
 };
 
 const clients = new Map<WebSocket, ConnectedClient>();
+const allowedCorsOrigins = new Set([
+  configuredFrontendAppUrl,
+  ...configuredFrontendCorsOrigins,
+].filter((value): value is string => Boolean(value)));
 
 function normalizeUrl(value?: string | null) {
   if (!value) return null;
@@ -182,6 +195,11 @@ function resolveRequestOrigin(req: Request) {
 
 function resolveFrontendOrigin(req?: Request, state?: OAuthStatePayload | null) {
   return state?.appOrigin || configuredFrontendAppUrl || normalizeUrl(req?.get("origin") ?? null);
+}
+
+function isAllowedCorsOrigin(origin: string, req: Request) {
+  const requestOrigin = resolveRequestOrigin(req);
+  return origin === requestOrigin || allowedCorsOrigins.has(origin);
 }
 
 function resolveGoogleRedirectUri(req?: Request, state?: OAuthStatePayload | null) {
@@ -856,9 +874,32 @@ wss.on("connection", (ws) => {
 
 app.use(express.json({ limit: '10mb' }));
 app.use((req, res, next) => {
-  res.header("Access-Control-Allow-Origin", "*");
-  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
-  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  let origin: string | null = null;
+  try {
+    origin = normalizeUrl(req.get("origin") ?? null);
+  } catch {
+    return res.status(400).json({ error: "Invalid Origin header." });
+  }
+
+  if (!origin) {
+    if (req.method === "OPTIONS") {
+      return res.sendStatus(204);
+    }
+    return next();
+  }
+
+  if (!isAllowedCorsOrigin(origin, req)) {
+    if (req.method === "OPTIONS") {
+      return res.status(403).json({ error: "Origin not allowed by CORS policy." });
+    }
+    return res.status(403).json({ error: "Origin not allowed by CORS policy." });
+  }
+
+  res.header("Vary", "Origin");
+  res.header("Access-Control-Allow-Origin", origin);
+  res.header("Access-Control-Allow-Headers", CORS_ALLOWED_HEADERS.join(", "));
+  res.header("Access-Control-Allow-Methods", CORS_ALLOWED_METHODS.join(", "));
+  res.header("Access-Control-Max-Age", "86400");
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
@@ -894,42 +935,9 @@ const upload = multer({
 });
 
 app.get("/uploads/:filename", requireAuth, async (req, res) => {
-  try {
-    const { filename } = req.params;
-    if (!req.user) {
-      return res.status(401).json({ error: "Authentication required" });
-    }
-
-    if (filename !== path.basename(filename)) {
-      return res.status(400).json({ error: "Invalid file path" });
-    }
-
-    const { data: screenshot, error } = await supabase
-      .from("screenshots")
-      .select("id")
-      .eq("filename", filename)
-      .eq("user_id", req.user.id)
-      .maybeSingle();
-
-    if (error) {
-      console.error("Uploads lookup error:", error);
-      return res.status(500).json({ error: "Failed to load upload" });
-    }
-
-    if (!screenshot) {
-      return res.status(404).json({ error: "Upload not found" });
-    }
-
-    const filePath = path.join(UPLOADS_DIR, filename);
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ error: "Upload file missing" });
-    }
-
-    res.sendFile(filePath);
-  } catch (error) {
-    console.error("Protected upload error:", error);
-    res.status(500).json({ error: "Failed to load upload" });
-  }
+  res.status(410).json({
+    error: "Legacy upload URLs are no longer supported. Use /api/screenshots/:id/image.",
+  });
 });
 
 app.get("/api/screenshots/:id/image", requireAuth, async (req, res) => {
@@ -2185,6 +2193,198 @@ app.post("/api/chat", requireAuth, rateLimit("chat", 30, 15 * 60 * 1000), async 
   }
 });
 
+app.get("/api/automation/weekly-digest/preview", requireAuth, async (req, res) => {
+  try {
+    if (!req.user) return res.status(401).json({ error: "Authentication required" });
+
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const { data, error } = await supabase
+      .from("screenshots")
+      .select("category, summary, entities, upload_date, created_at")
+      .eq("user_id", req.user.id)
+      .gte("upload_date", sevenDaysAgo)
+      .order("upload_date", { ascending: false });
+
+    if (error) {
+      return res.status(500).json({ error: "Failed to load screenshots for digest preview." });
+    }
+
+    const firstName = req.user.user_metadata?.first_name || req.user.email?.split("@")[0] || "there";
+    const digest = buildWeeklyDigest(firstName, data ?? []);
+    res.json({ digest, resendConfigured: isResendConfigured() });
+  } catch (error) {
+    res.status(500).json({ error: "Weekly digest preview failed." });
+  }
+});
+
+app.post("/api/automation/weekly-digest/send-test", requireAuth, rateLimit("weekly-digest-send-test", 5, 60 * 60 * 1000), async (req, res) => {
+  try {
+    if (!req.user) return res.status(401).json({ error: "Authentication required" });
+    if (!isResendConfigured()) {
+      return res.status(400).json({ error: "Resend is not configured. Set RESEND_API_KEY and RESEND_FROM_EMAIL." });
+    }
+
+    const requestedEmail = typeof req.body?.email === "string" ? req.body.email.trim() : "";
+    const targetEmail = requestedEmail || req.user.email;
+    if (!targetEmail) {
+      return res.status(400).json({ error: "No recipient email available." });
+    }
+
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const { data, error } = await supabase
+      .from("screenshots")
+      .select("category, summary, entities, upload_date, created_at")
+      .eq("user_id", req.user.id)
+      .gte("upload_date", sevenDaysAgo)
+      .order("upload_date", { ascending: false });
+
+    if (error) {
+      return res.status(500).json({ error: "Failed to load screenshots for weekly digest." });
+    }
+
+    if (!data || data.length === 0) {
+      return res.status(400).json({ error: "No screenshots found in the last 7 days for this user." });
+    }
+
+    const firstName = req.user.user_metadata?.first_name || req.user.email?.split("@")[0] || "there";
+    const digest = buildWeeklyDigest(firstName, data);
+    const result = await sendWeeklyDigestEmail(targetEmail, digest);
+
+    res.json({
+      ok: true,
+      emailId: result?.id ?? null,
+      sentTo: targetEmail,
+      screenshotCount: data.length,
+      subject: digest.subject,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : "Weekly digest send failed." });
+  }
+});
+
+app.post("/api/jobs/weekly-digest/run", async (req, res) => {
+  try {
+    const authHeader = req.get("authorization") || "";
+    const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length).trim() : "";
+
+    if (!weeklyDigestCronSecret || bearerToken !== weeklyDigestCronSecret) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    if (!isResendConfigured()) {
+      return res.status(400).json({ error: "Resend is not configured." });
+    }
+
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const now = new Date();
+    const weekKey = `${now.getUTCFullYear()}-W${String(getIsoWeek(now)).padStart(2, "0")}`;
+    const summary = {
+      attempted: 0,
+      failed: 0,
+      sent: 0,
+      skippedNoActivity: 0,
+      skippedNoEmail: 0,
+    };
+    const results: Array<Record<string, string | number | boolean | null>> = [];
+
+    let page = 1;
+    let hasMore = true;
+
+    while (hasMore) {
+      const { data, error } = await supabase.auth.admin.listUsers({
+        page,
+        perPage: 200,
+      });
+
+      if (error) {
+        return res.status(500).json({ error: error.message || "Failed to list users." });
+      }
+
+      const users = data?.users ?? [];
+      hasMore = users.length === 200;
+      page += 1;
+
+      for (const user of users) {
+        const email = user.email?.trim();
+        if (!email) {
+          summary.skippedNoEmail += 1;
+          results.push({
+            email: null,
+            reason: "missing_email",
+            sent: false,
+            userId: user.id,
+          });
+          continue;
+        }
+
+        const { data: screenshots, error: screenshotError } = await supabase
+          .from("screenshots")
+          .select("category, summary, entities, upload_date, created_at")
+          .eq("user_id", user.id)
+          .gte("upload_date", sevenDaysAgo)
+          .order("upload_date", { ascending: false });
+
+        if (screenshotError) {
+          summary.failed += 1;
+          summary.attempted += 1;
+          results.push({
+            email,
+            error: screenshotError.message || "Failed to load screenshots.",
+            sent: false,
+            userId: user.id,
+          });
+          continue;
+        }
+
+        if (!screenshots || screenshots.length === 0) {
+          summary.skippedNoActivity += 1;
+          results.push({
+            email,
+            reason: "no_recent_activity",
+            sent: false,
+            userId: user.id,
+          });
+          continue;
+        }
+
+        const firstName = user.user_metadata?.first_name || email.split("@")[0] || "there";
+        const digest = buildWeeklyDigest(firstName, screenshots);
+        const idempotencyKey = `weekly-digest:${weekKey}:${user.id}`;
+
+        try {
+          summary.attempted += 1;
+          const sendResult = await sendWeeklyDigestEmail(email, digest, { idempotencyKey });
+          summary.sent += 1;
+          results.push({
+            email,
+            emailId: sendResult?.id ?? null,
+            screenshotCount: screenshots.length,
+            sent: true,
+            userId: user.id,
+          });
+        } catch (sendError) {
+          summary.failed += 1;
+          results.push({
+            email,
+            error: sendError instanceof Error ? sendError.message : "Digest send failed.",
+            sent: false,
+            userId: user.id,
+          });
+        }
+      }
+    }
+
+    return res.json({
+      ok: true,
+      summary,
+      weekKey,
+      results,
+    });
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : "Weekly batch job failed." });
+  }
+});
+
 // Helper functions for vector math
 function dotProduct(a: number[], b: number[]) {
   if (!Array.isArray(a) || !Array.isArray(b) || a.length === 0 || b.length === 0 || a.length !== b.length) {
@@ -2197,6 +2397,14 @@ function magnitude(a: number[]) {
     return 0;
   }
   return Math.sqrt(a.reduce((sum, val) => sum + val * val, 0));
+}
+
+function getIsoWeek(date: Date) {
+  const copy = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const dayNum = copy.getUTCDay() || 7;
+  copy.setUTCDate(copy.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(copy.getUTCFullYear(), 0, 1));
+  return Math.ceil((((copy.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
 }
 
 async function startServer() {
@@ -2213,6 +2421,7 @@ async function startServer() {
     port: PORT,
     supabaseConfigured: Boolean(supabaseUrl && supabaseServiceRoleKey),
     openaiConfigured: Boolean(openaiApiKey),
+    resendConfigured: isResendConfigured(),
     openaiApiKeySource,
     analysisModel: OPENAI_ANALYSIS_MODEL,
     chatModel: OPENAI_CHAT_MODEL,

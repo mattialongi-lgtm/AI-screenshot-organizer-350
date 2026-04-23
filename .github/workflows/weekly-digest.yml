@@ -1,0 +1,25 @@
+name: Weekly Digest Batch
+
+on:
+  schedule:
+    - cron: "0 8 * * 1"
+  workflow_dispatch:
+
+jobs:
+  send-weekly-digests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger weekly digest job
+        env:
+          WEEKLY_DIGEST_CRON_SECRET: ${{ secrets.WEEKLY_DIGEST_CRON_SECRET }}
+          WEEKLY_DIGEST_JOB_URL: ${{ secrets.WEEKLY_DIGEST_JOB_URL }}
+        run: |
+          if [ -z "$WEEKLY_DIGEST_CRON_SECRET" ] || [ -z "$WEEKLY_DIGEST_JOB_URL" ]; then
+            echo "Missing scheduler secrets."
+            exit 1
+          fi
+
+          curl --fail-with-body \
+            -X POST "$WEEKLY_DIGEST_JOB_URL" \
+            -H "Authorization: Bearer $WEEKLY_DIGEST_CRON_SECRET" \
+            -H "Content-Type: application/json"

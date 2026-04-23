@@ -22,7 +22,7 @@ export const ScreenshotCard: React.FC<ScreenshotCardProps> = ({
   onDelete, 
   onReanalyze 
 }) => {
-  const imageUrl = useSecureScreenshotUrl(screenshot.id, screenshot.imageUrl);
+  const imageUrl = useSecureScreenshotUrl(screenshot.id);
 
   return (
     <motion.div

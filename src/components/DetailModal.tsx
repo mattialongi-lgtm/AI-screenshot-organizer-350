@@ -24,7 +24,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
 }) => {
   if (!screenshot) return null;
 
-  const imageUrl = useSecureScreenshotUrl(screenshot.id, screenshot.imageUrl);
+  const imageUrl = useSecureScreenshotUrl(screenshot.id);
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -55,6 +55,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
             {imageUrl ? (
               <img 
                 src={imageUrl} 
+                alt={screenshot.filename}
                 className="max-w-full max-h-full object-contain shadow-[0_0_100px_rgba(0,0,0,0.5)]"
               />
             ) : (

@@ -65,7 +65,6 @@ export interface ScreenshotMetadata {
     webViewLink?: string;
   };
   importedAt?: number;
-  imageUrl?: string;
   lastAnalyzedAt?: number;
   isAnalyzed: boolean;
   isSensitive?: boolean;

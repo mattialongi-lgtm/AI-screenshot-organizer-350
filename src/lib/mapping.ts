@@ -13,12 +13,6 @@ export const mapDbToScreenshot = (dbData: any): ScreenshotMetadata => {
     dbData.source === 'googleDrive' || dbData.source === 'google_drive' || String(dbData.source_id || '').startsWith('google_drive:')
       ? 'googleDrive'
       : (dbData.source || 'upload');
-  const imageUrl =
-    typeof dbData.imageUrl === 'string'
-      ? dbData.imageUrl
-      : typeof dbData.image_url === 'string'
-        ? dbData.image_url
-        : undefined;
 
   return {
     id: dbData.id,
@@ -32,7 +26,6 @@ export const mapDbToScreenshot = (dbData: any): ScreenshotMetadata => {
     entities: dbData.entities || { dates: [], amounts: [], emails: [], urls: [], phones: [], order_ids: [] },
     embedding: dbData.embedding,
     source,
-    imageUrl,
     isAnalyzed: !!(
       dbData.is_analyzed === 1 || 
       dbData.is_analyzed === true || 

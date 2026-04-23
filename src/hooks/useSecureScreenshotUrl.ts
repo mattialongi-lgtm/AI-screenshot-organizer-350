@@ -3,16 +3,10 @@ import { authenticatedFetch } from '../lib/supabase';
 
 export const useSecureScreenshotUrl = (
   screenshotId?: string | number | null,
-  fallbackUrl?: string
 ) => {
-  const [imageUrl, setImageUrl] = useState(fallbackUrl ?? '');
+  const [imageUrl, setImageUrl] = useState('');
 
   useEffect(() => {
-    if (fallbackUrl) {
-      setImageUrl(fallbackUrl);
-      return;
-    }
-
     if (screenshotId == null) {
       setImageUrl('');
       return;
@@ -63,7 +57,7 @@ export const useSecureScreenshotUrl = (
         URL.revokeObjectURL(objectUrl);
       }
     };
-  }, [fallbackUrl, screenshotId]);
+  }, [screenshotId]);
 
   return imageUrl;
 };
