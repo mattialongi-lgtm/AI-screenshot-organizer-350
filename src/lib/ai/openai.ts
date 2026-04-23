@@ -29,14 +29,21 @@ const buildBackendError = async (res: Response, fallbackLabel: string) => {
   }
 };
 
-export const analyzeScreenshot = async (imageBlob: Blob): Promise<AnalysisResult> => {
-  const base64Image = await blobToBase64(imageBlob);
-  const res = await authenticatedFetch(buildApiUrl("/api/analyze"), {
+export interface UploadApiResponse {
+  requestId?: string;
+  screenshot: any;
+}
+
+export const uploadScreenshot = async (file: File): Promise<UploadApiResponse> => {
+  const formData = new FormData();
+  formData.append("screenshot", file, file.name);
+
+  const res = await authenticatedFetch(buildApiUrl("/api/upload"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ image: base64Image.split(",")[1], mimeType: imageBlob.type }),
+    body: formData,
   });
-  if (!res.ok) throw await buildBackendError(res, "Backend analyze failed");
+
+  if (!res.ok) throw await buildBackendError(res, "Backend upload failed");
   return await res.json();
 };
 
@@ -98,12 +105,3 @@ export const askScreenshots = async (
 };
 
 const buildApiUrl = (pathname: string) => `${API_BASE}${pathname}`;
-
-const blobToBase64 = (blob: Blob): Promise<string> => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => resolve(reader.result as string);
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
-};

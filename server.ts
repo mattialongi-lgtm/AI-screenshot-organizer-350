@@ -638,6 +638,14 @@ async function uploadBufferToStorage(userId: string, originalName: string, buffe
   return storagePath;
 }
 
+async function removeStorageObjectBestEffort(storagePath: string) {
+  try {
+    await supabase.storage.from("screenshots").remove([storagePath]);
+  } catch (error) {
+    console.warn(`[upload] Failed to roll back storage object ${storagePath}:`, error);
+  }
+}
+
 async function persistGoogleTokens(
   sourceId: string,
   userId: string,
@@ -2060,22 +2068,35 @@ app.post("/api/upload", requireAuth, rateLimit("upload", 20, 15 * 60 * 1000), (r
     next();
   });
 }, async (req, res) => {
+  const requestId = createRequestId();
+  let storagePath: string | null = null;
   try {
-    if (!req.user) return res.status(401).json({ error: "Authentication required" });
-    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+    if (!req.user) return res.status(401).json({ error: "Authentication required", requestId });
+    if (!req.file) return res.status(400).json({ error: "No file uploaded", requestId });
 
     const buffer = fs.readFileSync(req.file.path);
-    const storagePath = await uploadBufferToStorage(
+    const mimeType = resolveMimeType(req.file.originalname, req.file.mimetype);
+
+    storagePath = await uploadBufferToStorage(
       req.user.id,
       req.file.originalname,
       buffer,
       req.file.mimetype,
     );
-    const analysis = await analyzeScreenshot(
-      buffer,
-      resolveMimeType(req.file.originalname, req.file.mimetype),
-    );
-    const embedding = await generateEmbedding(analysis.summary + " " + analysis.ocr_text);
+
+    let analysis: ScreenshotAnalysisResult;
+    let embedding: number[];
+    try {
+      analysis = await analyzeScreenshot(buffer, mimeType);
+      embedding = await generateEmbedding(`${analysis.summary} ${analysis.ocr_text}`.trim());
+    } catch (analysisError) {
+      await removeStorageObjectBestEffort(storagePath);
+      logRouteError("/api/upload", requestId, req, analysisError, {
+        stage: "analysis-failed",
+        storagePath,
+      });
+      return res.status(502).json({ error: "Analysis failed. Upload rolled back.", requestId });
+    }
 
     const { data, error } = await supabase
       .from('screenshots')
@@ -2084,11 +2105,12 @@ app.post("/api/upload", requireAuth, rateLimit("upload", 20, 15 * 60 * 1000), (r
         filename: storagePath,
         storage_path: storagePath,
         original_name: req.file.originalname,
+        source: "upload",
         category: analysis.category,
         summary: analysis.summary,
         ocr_text: analysis.ocr_text,
         entities: analysis.entities,
-        embedding: embedding,
+        embedding,
         is_sensitive: analysis.safety?.contains_sensitive ? 1 : 0,
         is_analyzed: 1,
         safety_reason: analysis.safety?.reason || "",
@@ -2098,16 +2120,23 @@ app.post("/api/upload", requireAuth, rateLimit("upload", 20, 15 * 60 * 1000), (r
       .select()
       .single();
 
-    if (error) {
-      console.error("Supabase insert error (Upload):", error);
-      throw error;
+    if (error || !data) {
+      await removeStorageObjectBestEffort(storagePath);
+      logRouteError("/api/upload", requestId, req, error, {
+        stage: "db-insert-failed",
+        storagePath,
+      });
+      return res.status(500).json({ error: "Failed to persist screenshot. Upload rolled back.", requestId });
     }
+
     await replaceScreenshotTagsBestEffort("/api/upload", data.id, analysis.tags);
-    console.log("Supabase insert success (Upload):", data.id);
-    res.json({ id: data.id, ...analysis });
+
+    const screenshotRow = { ...data, tags: analysis.tags.map((tag) => ({ tag })) };
+    res.json({ requestId, screenshot: screenshotRow });
   } catch (error) {
-    console.error("Upload error:", error);
-    res.status(500).json({ error: "Failed to process screenshot" });
+    if (storagePath) await removeStorageObjectBestEffort(storagePath);
+    logRouteError("/api/upload", requestId, req, error, { stage: "failed", storagePath });
+    res.status(500).json({ error: "Failed to process screenshot", requestId });
   } finally {
     if (req.file?.path && fs.existsSync(req.file.path)) {
       fs.unlinkSync(req.file.path);

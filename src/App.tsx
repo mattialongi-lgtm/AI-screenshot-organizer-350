@@ -22,7 +22,8 @@ import { ScreenshotMetadata, Category, ChatMessage } from './types';
 import {
   analyzeStoredScreenshot,
   askScreenshots,
-  isMockMode
+  isMockMode,
+  uploadScreenshot,
 } from './lib/ai/openai';
 import { keywordSearch, semanticSearch } from './lib/search';
 
@@ -185,52 +186,15 @@ export default function App() {
   const handleUpload = async (files: File[]) => {
     setIsUploading(true);
     for (const file of files) {
-      const blob = new Blob([file], { type: file.type });
-      const newScreenshot: ScreenshotMetadata = {
-        createdAt: Date.now(),
-        filename: file.name,
-        ocrText: '',
-        summary: '',
-        category: 'Other',
-        tags: [],
-        entities: { dates: [], amounts: [], emails: [], urls: [], phones: [], order_ids: [] },
-        source: 'upload',
-        isAnalyzed: false,
-        userId: user?.id
-      };
-
       try {
-        const safeFilename = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-        const fileName = `${user!.id}/${Date.now()}_${safeFilename}`;
-        const { error: uploadError } = await supabase.storage
-          .from('screenshots')
-          .upload(fileName, blob);
-
-        if (uploadError) throw uploadError;
-
-        newScreenshot.filename = fileName;
-
-        const dbDataToInsert = mapScreenshotToDb(newScreenshot);
-        const { data: dbData, error: dbError } = await supabase
-          .from('screenshots')
-          .insert([{
-            ...dbDataToInsert,
-            filename: fileName,
-            storage_path: fileName,
-            original_name: file.name,
-            user_id: user!.id,
-            upload_date: new Date().toISOString()
-          }])
-          .select()
-          .single();
-
-        if (dbError) throw dbError;
-        if (dbData) {
-          newScreenshot.id = dbData.id;
-          setScreenshots(prev => [newScreenshot, ...prev]);
-        }
-
-        processAnalysis(newScreenshot);
+        const { screenshot: row } = await uploadScreenshot(file);
+        const mapped = mapDbToScreenshot(row);
+        setScreenshots(prev => {
+          if (prev.some(s => String(s.id) === String(mapped.id))) {
+            return prev.map(s => String(s.id) === String(mapped.id) ? { ...s, ...mapped } : s);
+          }
+          return [mapped, ...prev];
+        });
       } catch (err: any) {
         console.error("Upload failed:", err);
         alert(`Upload Error: ${err.message || JSON.stringify(err)}`);
@@ -239,33 +203,19 @@ export default function App() {
     setIsUploading(false);
   };
 
-  const processAnalysis = async (screenshot: ScreenshotMetadata) => {
-    if (screenshot.isAnalyzed || !screenshot.id) return;
-
-    try {
-      const result = await analyzeStoredScreenshot(screenshot.id);
-      const updated: ScreenshotMetadata = {
-        ...screenshot,
-        category: result.category,
-        summary: result.summary,
-        ocrText: result.ocr_text,
-        tags: result.tags,
-        entities: result.entities,
-        isSensitive: result.safety?.contains_sensitive ?? false,
-        safetyReason: result.safety?.reason ?? '',
-        embedding: result.embedding ?? screenshot.embedding,
-        isAnalyzed: true,
-        lastAnalyzedAt: Date.now()
-      };
-
-      setScreenshots(prev => prev.map(s => String(s.id) === String(updated.id) ? updated : s));
-    } catch (err: any) {
-      console.error("processAnalysis failed for:", screenshot.id, err);
-      alert(`Analysis Error: ${err.message || JSON.stringify(err)}`);
-      const failed = { ...screenshot, isAnalyzed: false, summary: "Analysis failed." };
-      setScreenshots(prev => prev.map(s => String(s.id) === String(failed.id) ? failed : s));
-    }
-  };
+  const applyAnalysisResult = (screenshot: ScreenshotMetadata, result: Awaited<ReturnType<typeof analyzeStoredScreenshot>>): ScreenshotMetadata => ({
+    ...screenshot,
+    category: result.category,
+    summary: result.summary,
+    ocrText: result.ocr_text,
+    tags: result.tags,
+    entities: result.entities,
+    isSensitive: result.safety?.contains_sensitive ?? false,
+    safetyReason: result.safety?.reason ?? '',
+    embedding: result.embedding ?? screenshot.embedding,
+    isAnalyzed: true,
+    lastAnalyzedAt: Date.now(),
+  });
 
   const handleDelete = async (id: string | number) => {
     if (!confirm("Are you sure you want to delete this screenshot?")) {
@@ -319,9 +269,17 @@ export default function App() {
 
   const handleReanalyze = async (e: React.MouseEvent, s: ScreenshotMetadata) => {
     e.stopPropagation();
-    console.log("Manual re-analyze requested for:", s.id);
+    if (!s.id) return;
     setScreenshots(prev => prev.map(item => String(item.id) === String(s.id) ? { ...item, isAnalyzed: false } : item));
-    processAnalysis(s);
+    try {
+      const result = await analyzeStoredScreenshot(s.id);
+      const updated = applyAnalysisResult(s, result);
+      setScreenshots(prev => prev.map(item => String(item.id) === String(updated.id) ? updated : item));
+    } catch (err: any) {
+      console.error("Re-analysis failed for:", s.id, err);
+      alert(`Analysis Error: ${err.message || JSON.stringify(err)}`);
+      setScreenshots(prev => prev.map(item => String(item.id) === String(s.id) ? { ...item, isAnalyzed: true } : item));
+    }
   };
 
   const filteredScreenshots = useMemo(() => {
