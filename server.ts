@@ -2267,6 +2267,16 @@ app.post("/api/jobs/weekly-digest/run", async (req, res) => {
     const authHeader = req.get("authorization") || "";
     const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length).trim() : "";
 
+    console.log("[weekly-digest] auth check", JSON.stringify({
+      authHeaderPresent: Boolean(authHeader),
+      bearerLength: bearerToken.length,
+      bearerPrefix: bearerToken ? bearerToken.slice(0, 8) : null,
+      cronSecretConfigured: Boolean(weeklyDigestCronSecret),
+      cronSecretLength: weeklyDigestCronSecret?.length ?? 0,
+      cronSecretPrefix: weeklyDigestCronSecret ? weeklyDigestCronSecret.slice(0, 8) : null,
+      url: req.originalUrl,
+    }));
+
     if (!weeklyDigestCronSecret || bearerToken !== weeklyDigestCronSecret) {
       return res.status(401).json({ error: "Unauthorized" });
     }
