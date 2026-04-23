@@ -1,6 +1,6 @@
 # Weekly Digest Scheduler
 
-This project supports a weekly digest batch job that sends one email per registered user with recent screenshot activity.
+This is an optional operational add-on for the web app. It sends one email per registered user with recent screenshot activity.
 
 ## What runs weekly
 
@@ -15,6 +15,8 @@ This route:
 - skips users without an email or without recent activity
 - builds a personalized weekly digest
 - sends it with Resend
+
+Core product setup does not require this scheduler.
 
 ## Required environment variables
 

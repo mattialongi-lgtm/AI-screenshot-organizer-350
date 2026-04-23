@@ -1,57 +1,129 @@
-# AI Screenshot Organizer (Apple Native)
+# ScreenSort
 
-A production-quality SwiftUI application for iOS and macOS that intelligently organizes screenshots using Apple's Vision framework and OpenAI.
+ScreenSort is a React/Vite frontend with an Express/TypeScript backend and Supabase for auth, database, realtime updates, and private screenshot storage. It helps users upload or sync screenshots, analyze them with OpenAI, search by keyword or meaning, and ask questions about their archive.
 
-## 🚀 Features
+## Architecture
 
-### 1. Photos Auto-Import (PhotoKit)
-- **Smart Detection**: Automatically identifies screenshots in your Photos library.
-- **Auto-Import**: Observes library changes using `PHPhotoLibraryChangeObserver` to process new screenshots in the background.
-- **Manual Scan**: Trigger a full library scan from the Sources view.
+- Frontend: React 19 + Vite
+- Backend: Express + TypeScript in `server.ts`
+- Auth: Supabase Auth with email/password and Google sign-in
+- Data: Supabase Postgres (`screenshots`, `tags`, `cloud_sources`)
+- File storage: private Supabase Storage bucket named `screenshots`
+- AI: OpenAI for screenshot analysis, embeddings, semantic search, and archive Q&A
+- Cloud source: Google Drive OAuth + sync
+- Optional automation: weekly digest email via Resend
 
-### 2. AI Analysis Pipeline
-- **On-Device OCR**: Uses Apple's **Vision** framework (`VNRecognizeTextRequest`) for fast, private text extraction.
-- **Hybrid AI (OpenAI)**: 
-  - **Summarization**: Generates 1-2 line summaries of screenshot content.
-  - **Classification**: Categorizes into Chat, Receipt, Social Media, etc.
-  - **Entity Extraction**: Identifies dates, amounts, URLs, and emails.
-  - **Sensitive Detection**: Flags screenshots containing credentials or financial info.
-- **Privacy First**: OCR always happens on-device. Cloud AI is optional and requires a user-provided API key.
+## Current Product Surface
 
-### 3. Advanced Search & Chat
-- **Hybrid Search**: Combines keyword matching with semantic relevance.
-- **Semantic Search**: Uses OpenAI embeddings for "search by meaning."
-- **AI Chat (RAG)**: Ask questions about your screenshots. The app retrieves relevant context and provides answers with visual references.
+- Manual screenshot upload from the web UI
+- Google Drive as the only connected cloud source
+- Automatic screenshot analysis on ingest:
+  - OCR-style text extraction
+  - summary
+  - category
+  - tags
+  - entities such as amounts, dates, emails, URLs, phones, and order IDs
+  - sensitive-content flagging
+  - embeddings for semantic retrieval
+- Search:
+  - keyword filtering in the client
+  - semantic search backed by embeddings
+- AI chat over the user’s own screenshots
+- Realtime archive updates through Supabase + WebSocket events
+- Private image access through authenticated API routes
 
-### 4. Premium SwiftUI Design
-- **Modern Grid**: Responsive layout with smooth animations and micro-interactions.
-- **Detail View**: Full image preview with interactive tags and extracted metadata.
-- **Sources View**: Centralized control for permissions, auto-import, and AI settings.
+## Core Flows
 
-## 🛠️ Tech Stack
-- **Language**: Swift 5.10+
-- **Framework**: SwiftUI
-- **Persistence**: SwiftData (Core Data successor)
-- **AI**: Vision (OCR), OpenAI API (Analysis, Chat, and Embeddings)
-- **Automation**: PhotoKit Change Observation, Background Tasks
+### Auth flow
 
-## 📦 Project Structure
-- `App/`: Main entry point and app configuration.
-- `Models/`: SwiftData models and supporting structures.
-- `Services/`: Core logic for Photos, OCR, AI, and Search.
-- `UI/`: Modular SwiftUI views for the library, details, and chat.
+- The frontend signs users in with Supabase Auth.
+- The backend expects the Supabase access token in the `Authorization` header.
+- Google Drive connection is a separate OAuth flow used only for importing Drive files into the user’s ScreenSort archive.
 
-## 🚦 How to Run
-1. Open the project in **Xcode 15+**.
-2. Ensure you are targeting **iOS 17+** or **macOS 14+**.
-3. Run the app on a physical device for the best Photos library experience.
-4. **Permissions**: Grant Photos access when prompted.
-5. **AI Setup**: Go to **Sources** to connect Google Drive or upload screenshots manually, then add your OpenAI API key.
+### Upload flow
 
-## 🔒 Privacy Notes
-- All image processing for OCR is performed locally on your device.
-- Images are never uploaded to the cloud unless Cloud-Enhanced AI is enabled.
-- API keys are stored securely in the app's local storage (Keychain recommended for production).
+1. A signed-in user uploads an image from the web UI.
+2. The backend validates the file and stores it in the private Supabase `screenshots` bucket.
+3. The backend analyzes the image with OpenAI.
+4. The analyzed result is saved to the `screenshots` table, and tags are persisted alongside it.
+5. The frontend updates in realtime.
 
----
-*Built for a school project demonstration.*
+Note: uploads depend on `OPENAI_API_KEY`. If analysis fails, the backend rolls the upload back instead of keeping an unanalyzed file.
+
+### Search and AI flow
+
+- Keyword search filters the loaded archive in the client.
+- Semantic search uses embeddings generated by the backend.
+- AI chat selects relevant screenshots and sends summarized context to the backend for a grounded answer.
+
+### Google Drive source flow
+
+1. The user opens `Sources` and connects Google Drive.
+2. The backend stores the Drive source in `cloud_sources`.
+3. A sync scans Drive for screenshot-like files based on configured keywords and date range.
+4. Matching files are imported into Supabase Storage, analyzed, and inserted into `screenshots`.
+
+## Local Development
+
+### Prerequisites
+
+- Node.js 20+
+- A Supabase project with the app tables and a private `screenshots` storage bucket
+- OpenAI API key
+- Google Cloud OAuth credentials if you want Google Drive import
+
+### Setup
+
+1. Install dependencies:
+
+```bash
+npm install
+```
+
+2. Copy `.env.example` to `.env` and fill in the required values.
+
+3. Apply the checked-in Supabase SQL changes as needed:
+
+- `supabase_migration_cloud_sources.sql`
+- `supabase_migration_private_screenshots_bucket.sql`
+- `supabase_security_advisor_fixes.sql`
+
+These are additive migrations for the current cloud-source and storage setup, not a full database bootstrap for a brand-new Supabase project.
+
+4. Start the app:
+
+```bash
+npm run dev
+```
+
+5. Open `http://localhost:3000`.
+
+Local development runs as a single Node process: the Express server starts first and mounts Vite in middleware mode for the frontend.
+
+## Required Environment Variables
+
+These are required for the app to boot and work normally:
+
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `OPENAI_API_KEY`
+- `GOOGLE_OAUTH_STATE_SECRET`
+- `GOOGLE_TOKEN_ENCRYPTION_KEY`
+
+These are optional unless you enable the related feature:
+
+- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`: Google Drive source connection
+- `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `RESEND_REPLY_TO`, `WEEKLY_DIGEST_CRON_SECRET`: weekly digest email
+- `VITE_API_URL`, `APP_URL`, `API_PUBLIC_URL`, `FRONTEND_CORS_ORIGINS`, `GOOGLE_OAUTH_REDIRECT_URI`: split frontend/backend deployments and custom callback handling
+- `OPENAI_ANALYSIS_MODEL`, `OPENAI_CHAT_MODEL`, `OPENAI_EMBEDDING_MODEL`, `OPENAI_EMBEDDING_DIMENSIONS`: model overrides
+
+## Deployment Notes
+
+- Local dev assumes same-origin frontend and backend on port `3000`.
+- The current production-friendly path is split deployment:
+  - host the Vite frontend separately
+  - host the Express backend separately
+  - set `VITE_API_URL` in the frontend
+  - set `APP_URL`, `API_PUBLIC_URL`, and any extra `FRONTEND_CORS_ORIGINS` on the backend
+- If you use Google Drive auth in a split deployment, make sure the backend callback URL matches `API_PUBLIC_URL` or `GOOGLE_OAUTH_REDIRECT_URI`.
