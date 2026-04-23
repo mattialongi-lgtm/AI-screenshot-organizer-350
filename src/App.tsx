@@ -34,7 +34,7 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-import { supabase, useSupabaseAuth, getAccessToken } from './lib/supabase';
+import { supabase, useSupabaseAuth, getAccessToken, authenticatedFetch } from './lib/supabase';
 import { AuthButton } from './components/AuthButton';
 import { SourcesPage } from './pages/Sources';
 import { Cloud } from 'lucide-react';
@@ -232,39 +232,14 @@ export default function App() {
     }
 
     try {
-      const { data, error: lookupError } = await supabase
-        .from('screenshots')
-        .select('storage_path')
-        .eq('id', id)
-        .eq('user_id', user!.id)
-        .maybeSingle();
+      const res = await authenticatedFetch(`/api/screenshots/${encodeURIComponent(String(id))}`, {
+        method: 'DELETE',
+      });
+      const payload = await res.json().catch(() => ({}));
 
-      if (lookupError) throw lookupError;
-
-      const { error: tagsDeleteError } = await supabase
-        .from('tags')
-        .delete()
-        .eq('screenshot_id', id);
-
-      if (tagsDeleteError) throw tagsDeleteError;
-
-      if (data?.storage_path) {
-        const { error: storageError } = await supabase.storage
-          .from('screenshots')
-          .remove([data.storage_path]);
-
-        if (storageError) {
-          console.warn('Storage delete warning:', storageError);
-        }
+      if (!res.ok) {
+        throw new Error(payload.error || 'Delete failed.');
       }
-
-      const { error: deleteError } = await supabase
-        .from('screenshots')
-        .delete()
-        .eq('id', id)
-        .eq('user_id', user!.id);
-
-      if (deleteError) throw deleteError;
 
       setScreenshots(prev => prev.filter(s => String(s.id) !== String(id)));
       if (String(selectedScreenshot?.id) === String(id)) {

@@ -7,6 +7,7 @@ import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Shield, Share2, Trash2, Copy, Tag, Calendar, Sparkles } from 'lucide-react';
 import { ScreenshotMetadata } from '../types';
+import { useSecureScreenshotUrl } from '../hooks/useSecureScreenshotUrl';
 
 interface DetailModalProps {
   screenshot: ScreenshotMetadata | null;
@@ -23,7 +24,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
 }) => {
   if (!screenshot) return null;
 
-  const imageUrl = screenshot.imageUrl ?? '';
+  const imageUrl = useSecureScreenshotUrl(screenshot.id, screenshot.imageUrl);
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -51,11 +52,14 @@ export const DetailModal: React.FC<DetailModalProps> = ({
               <div className="absolute top-10 left-10 mono-label">Specimen ID: {screenshot.id}</div>
               <div className="absolute bottom-10 right-10 mono-label">Capture: {new Date(screenshot.createdAt).toISOString()}</div>
             </div>
-            <img 
-              src={imageUrl} 
-              className="max-w-full max-h-full object-contain shadow-[0_0_100px_rgba(0,0,0,0.5)]"
-              onLoad={() => !screenshot.imageUrl && URL.revokeObjectURL(imageUrl)}
-            />
+            {imageUrl ? (
+              <img 
+                src={imageUrl} 
+                className="max-w-full max-h-full object-contain shadow-[0_0_100px_rgba(0,0,0,0.5)]"
+              />
+            ) : (
+              <div className="w-full h-full bg-white/[0.02]" />
+            )}
           </div>
           
           <div className="w-full lg:w-[500px] border-l border-white/10 flex flex-col bg-ink">

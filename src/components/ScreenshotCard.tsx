@@ -7,6 +7,7 @@ import React from 'react';
 import { motion } from 'motion/react';
 import { Shield, Eye, Trash2, RefreshCw, Tag, Calendar } from 'lucide-react';
 import { ScreenshotMetadata } from '../types';
+import { useSecureScreenshotUrl } from '../hooks/useSecureScreenshotUrl';
 
 interface ScreenshotCardProps {
   screenshot: ScreenshotMetadata;
@@ -21,7 +22,7 @@ export const ScreenshotCard: React.FC<ScreenshotCardProps> = ({
   onDelete, 
   onReanalyze 
 }) => {
-  const imageUrl = screenshot.imageUrl ?? '';
+  const imageUrl = useSecureScreenshotUrl(screenshot.id, screenshot.imageUrl);
 
   return (
     <motion.div
@@ -33,12 +34,15 @@ export const ScreenshotCard: React.FC<ScreenshotCardProps> = ({
       className="editorial-card group cursor-pointer"
     >
       <div className="aspect-[4/5] overflow-hidden relative border-b border-white/5">
-        <img 
-          src={imageUrl} 
-          alt={screenshot.filename}
-          className="w-full h-full object-cover transition-transform duration-[1.5s] ease-out group-hover:scale-105"
-          onLoad={() => !screenshot.imageUrl && URL.revokeObjectURL(imageUrl)}
-        />
+        {imageUrl ? (
+          <img 
+            src={imageUrl} 
+            alt={screenshot.filename}
+            className="w-full h-full object-cover transition-transform duration-[1.5s] ease-out group-hover:scale-105"
+          />
+        ) : (
+          <div className="w-full h-full bg-white/[0.02]" />
+        )}
         
         {!screenshot.isAnalyzed && (
           <div className="absolute inset-0 bg-ink/60 backdrop-blur-md flex flex-col items-center justify-center gap-3">

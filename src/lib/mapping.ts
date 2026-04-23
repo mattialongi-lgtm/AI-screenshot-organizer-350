@@ -4,13 +4,6 @@
  */
 
 import { ScreenshotMetadata, Category } from '../types';
-import { buildApiUrl } from './api';
-
-const encodeStoragePath = (storagePath: string) =>
-  storagePath
-    .split('/')
-    .map(segment => encodeURIComponent(segment))
-    .join('/');
 
 export const mapDbToScreenshot = (dbData: any): ScreenshotMetadata => {
   const userId = dbData.userId || dbData.user_id;
@@ -20,19 +13,12 @@ export const mapDbToScreenshot = (dbData: any): ScreenshotMetadata => {
     dbData.source === 'googleDrive' || dbData.source === 'google_drive' || String(dbData.source_id || '').startsWith('google_drive:')
       ? 'googleDrive'
       : (dbData.source || 'upload');
-  
-  // Reconstruct imageUrl from storage path if not directly provided
-  let imageUrl = dbData.imageUrl || dbData.image_url;
-  if (!imageUrl && storagePath) {
-    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-    if (supabaseUrl) {
-      imageUrl = `${supabaseUrl}/storage/v1/object/public/screenshots/${encodeStoragePath(storagePath)}`;
-    }
-  }
-
-  if (!imageUrl && filename && !String(filename).includes('/')) {
-    imageUrl = buildApiUrl(`/uploads/${encodeURIComponent(String(filename))}`);
-  }
+  const imageUrl =
+    typeof dbData.imageUrl === 'string'
+      ? dbData.imageUrl
+      : typeof dbData.image_url === 'string'
+        ? dbData.image_url
+        : undefined;
 
   return {
     id: dbData.id,
