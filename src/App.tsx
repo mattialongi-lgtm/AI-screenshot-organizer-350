@@ -42,26 +42,10 @@ import { Cloud } from 'lucide-react';
 import { mapDbToScreenshot, mapScreenshotToDb } from './lib/mapping';
 import { LandingPage } from './pages/LandingPage';
 import { buildWebSocketUrl } from './lib/api';
+import { applyStructuredFilters, getScreenshotsByIds } from './lib/screenshotFilters';
 
 const FOLLOW_UP_QUERY_RE = /^(why|how|and|more|explain|because|what about|it|this|that|those|them)\b/i;
 const RECENT_SCREENSHOT_QUERY_RE = /\b(upload(?:ed)?|latest|last|recent|new|this|that|it|screenshot|screen)\b/i;
-
-function getScreenshotsByIds(
-  source: ScreenshotMetadata[],
-  ids: (string | number)[],
-) {
-  if (ids.length === 0) return [];
-  const byId = new Map(
-    source
-      .filter((screenshot) => screenshot.id != null)
-      .map((screenshot) => [String(screenshot.id), screenshot]),
-  );
-
-  return ids.flatMap((id) => {
-    const screenshot = byId.get(String(id));
-    return screenshot ? [screenshot] : [];
-  });
-}
 
 export default function App() {
   const [currentPage, setCurrentPage] = useState<'home' | 'sources'>('home');
@@ -277,26 +261,10 @@ export default function App() {
     }
   };
 
-  const applyStructuredFilters = (source: ScreenshotMetadata[]) => {
-    let result = [...source];
-
-    if (activeCategory !== 'All') {
-      result = result.filter((screenshot) => screenshot.category === activeCategory);
-    }
-
-    if (hasAmount) {
-      result = result.filter((screenshot) => screenshot.entities.amounts.length > 0);
-    }
-
-    if (hasUrl) {
-      result = result.filter((screenshot) => screenshot.entities.urls.length > 0);
-    }
-
-    return result;
-  };
+  const structuredFilters = { activeCategory, hasAmount, hasUrl };
 
   const archiveScreenshots = useMemo(() => {
-    let result = applyStructuredFilters(screenshots);
+    let result = applyStructuredFilters(screenshots, structuredFilters);
 
     if (searchQuery.trim() && !isSemanticSearchActive) {
       result = keywordSearch(searchQuery, result);
@@ -310,7 +278,10 @@ export default function App() {
       return [];
     }
 
-    return applyStructuredFilters(getScreenshotsByIds(screenshots, semanticResultIds));
+    return applyStructuredFilters(
+      getScreenshotsByIds(screenshots, semanticResultIds),
+      structuredFilters,
+    );
   }, [screenshots, semanticResultIds, activeCategory, hasAmount, hasUrl]);
 
   const visibleScreenshots = useMemo(() => {

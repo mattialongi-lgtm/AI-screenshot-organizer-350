@@ -3,7 +3,9 @@
     "allow": [
       "Bash(npx tsc *)",
       "Bash(npm run *)",
-      "Bash(node -e \"console.log\\('GOOGLE_OAUTH_STATE_SECRET=' + require\\('crypto'\\).randomBytes\\(32\\).toString\\('hex'\\)\\); console.log\\('AGENT_TOKEN_SECRET=' + require\\('crypto'\\).randomBytes\\(32\\).toString\\('hex'\\)\\)\")"
+      "Bash(node -e \"console.log\\('GOOGLE_OAUTH_STATE_SECRET=' + require\\('crypto'\\).randomBytes\\(32\\).toString\\('hex'\\)\\); console.log\\('AGENT_TOKEN_SECRET=' + require\\('crypto'\\).randomBytes\\(32\\).toString\\('hex'\\)\\)\")",
+      "Bash(npm install *)",
+      "Bash(npm test *)"
     ]
   }
 }

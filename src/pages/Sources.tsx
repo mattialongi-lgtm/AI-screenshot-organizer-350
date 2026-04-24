@@ -8,51 +8,19 @@ import {
   RefreshCw,
   Trash2,
 } from 'lucide-react';
-import { CloudSource, SourceSettings } from '../types';
+import { CloudSource } from '../types';
 import { authenticatedFetch } from '../lib/supabase';
 import { getApiOrigin } from '../lib/api';
+import {
+  buildSyncSummary,
+  extractSyncError,
+  normalizeSource,
+  parseJsonResponse,
+} from './sourcesHelpers';
 
 interface SourcesPageProps {
   onBack: () => void;
 }
-
-const defaultSourceSettings: SourceSettings = {
-  keywords: ['screenshot', 'screen shot', 'screenshots', 'IMG_'],
-  dateRangeDays: 30,
-  maxFiles: 200,
-  autoSyncEnabled: false,
-  intervalMinutes: 15,
-};
-
-const parseJsonResponse = async (res: Response) => {
-  const text = await res.text();
-
-  try {
-    return text ? JSON.parse(text) : {};
-  } catch {
-    return { error: text || `HTTP ${res.status}` };
-  }
-};
-
-const normalizeSource = (source: any): CloudSource => ({
-  id: String(source.id),
-  provider: 'googleDrive',
-  status: source.status === 'error' ? 'error' : source.status === 'connected' ? 'connected' : 'disconnected',
-  connectedAt:
-    typeof source.connectedAt === 'number'
-      ? source.connectedAt
-      : source.connected_at
-        ? new Date(source.connected_at).getTime()
-        : undefined,
-  lastSyncAt:
-    typeof source.lastSyncAt === 'number'
-      ? source.lastSyncAt
-      : source.last_sync
-        ? new Date(source.last_sync).getTime()
-        : undefined,
-  accountEmail: source.accountEmail || source.email || undefined,
-  settings: source.settings || defaultSourceSettings,
-});
 
 export const SourcesPage: React.FC<SourcesPageProps> = ({ onBack }) => {
   const [sources, setSources] = useState<CloudSource[]>([]);
@@ -171,21 +139,10 @@ export const SourcesPage: React.FC<SourcesPageProps> = ({ onBack }) => {
       const payload = await parseJsonResponse(res);
 
       if (!res.ok || payload.success === false) {
-        const firstError = Array.isArray(payload.results)
-          ? payload.results.find((result: any) => result.error)?.error
-          : null;
-        throw new Error(firstError || payload.error || 'Google Drive sync failed.');
+        throw new Error(extractSyncError(payload) || 'Google Drive sync failed.');
       }
 
-      const resultSummary = Array.isArray(payload.results) ? payload.results[0] : null;
-      const syncMessage = [
-        `Imported ${payload.syncedCount || 0} new screenshot(s).`,
-        resultSummary?.skipped ? `Skipped ${resultSummary.skipped}.` : null,
-        resultSummary?.errors ? `Errors ${resultSummary.errors}.` : null,
-      ]
-        .filter(Boolean)
-        .join(' ');
-
+      const syncMessage = buildSyncSummary(payload);
       alert(syncMessage || 'Sync complete.');
       await loadSources(false);
     } catch (err: any) {

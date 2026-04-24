@@ -817,7 +817,7 @@ setInterval(() => {
   for (const [key, entry] of _rlStore) {
     if (now > entry.resetAt) _rlStore.delete(key);
   }
-}, 5 * 60 * 1000);
+}, 5 * 60 * 1000).unref();
 
 function rateLimit(prefix: string, limit: number, windowMs: number) {
   return (req: Request, res: Response, next: NextFunction) => {
@@ -2271,9 +2271,13 @@ app.post("/api/jobs/weekly-digest/run", async (req, res) => {
       authHeaderPresent: Boolean(authHeader),
       bearerLength: bearerToken.length,
       bearerPrefix: bearerToken ? bearerToken.slice(0, 8) : null,
+      bearerSuffix: bearerToken ? bearerToken.slice(-8) : null,
+      bearerCharCodes: bearerToken ? Array.from(bearerToken.slice(-3)).map((char) => char.charCodeAt(0)) : [],
       cronSecretConfigured: Boolean(weeklyDigestCronSecret),
       cronSecretLength: weeklyDigestCronSecret?.length ?? 0,
       cronSecretPrefix: weeklyDigestCronSecret ? weeklyDigestCronSecret.slice(0, 8) : null,
+      cronSecretSuffix: weeklyDigestCronSecret ? weeklyDigestCronSecret.slice(-8) : null,
+      cronSecretCharCodes: weeklyDigestCronSecret ? Array.from(weeklyDigestCronSecret.slice(-3)).map((char) => char.charCodeAt(0)) : [],
       url: req.originalUrl,
     }));
 
@@ -2444,4 +2448,8 @@ async function startServer() {
   });
 }
 
-startServer();
+export { app, server };
+
+if (!process.env.VITEST) {
+  startServer();
+}
