@@ -73,30 +73,36 @@ export const ScreenshotCard: React.FC<ScreenshotCardProps> = ({
           <span className="mono-label text-[8px]">Inspect Specimen</span>
         </div>
 
+        {String(screenshot.id).startsWith('demo-') && (
+          <div className="absolute top-4 left-4 bg-white/90 text-accent px-2 py-1 shadow-[0_4px_20px_rgba(0,0,0,0.1)] border border-black/10 rounded-md backdrop-blur-sm z-10">
+            <span className="font-sans font-extrabold text-[9px] tracking-[0.2em] uppercase">Example Data</span>
+          </div>
+        )}
+
         {screenshot.isSensitive && (
-          <div className="absolute top-4 right-4 bg-accent text-ink p-1.5 shadow-xl">
+          <div className="absolute top-4 right-4 bg-accent text-white rounded-md p-1.5 shadow-xl z-10">
             <Shield className="w-3.5 h-3.5" />
           </div>
         )}
       </div>
 
-      <div className="p-6 space-y-4">
-        <div className="flex items-center justify-between">
+      <div className="p-4 space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 sm:gap-2">
           <span className="mono-label text-accent">
             {screenshot.category}
           </span>
-          <span className="mono-label">
+          <span className="font-sans font-bold text-[10px] uppercase tracking-widest text-muted whitespace-nowrap text-left sm:text-right">
             {new Date(screenshot.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: '2-digit' })}
           </span>
         </div>
         
-        <h3 className="text-lg font-serif italic leading-tight group-hover:text-accent transition-colors">
+        <h3 className="text-base font-sans font-extrabold leading-snug group-hover:text-accent transition-colors line-clamp-3">
           {screenshot.isAnalyzed ? screenshot.summary : 'Awaiting intelligence...'}
         </h3>
 
-        <div className="flex flex-wrap gap-2 pt-2">
+        <div className="flex flex-wrap gap-1.5 pt-1">
           {screenshot.tags.slice(0, 3).map((tag: string) => (
-            <span key={tag} className="mono-label text-[8px] border border-white/10 px-2 py-1">
+            <span key={tag} className="font-sans font-bold text-[9px] uppercase tracking-wider bg-black/5 border border-black/10 text-muted px-2 py-1 rounded-md">
               {tag}
             </span>
           ))}

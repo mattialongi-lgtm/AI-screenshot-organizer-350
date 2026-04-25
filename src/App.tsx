@@ -40,9 +40,37 @@ import { SourcesPage } from './pages/Sources';
 import { Cloud } from 'lucide-react';
 
 import { mapDbToScreenshot, mapScreenshotToDb } from './lib/mapping';
-import { LandingPage } from './pages/LandingPage';
+import { AuthModal } from './components/AuthModal';
 import { buildWebSocketUrl } from './lib/api';
 import { applyStructuredFilters, getScreenshotsByIds } from './lib/screenshotFilters';
+
+const DEMO_SCREENSHOTS: ScreenshotMetadata[] = [
+  {
+    id: 'demo-1',
+    // We add a temp property for the UI if it supports it, else we rely on source 'manual'
+    filename: 'receipt_dinner.png',
+    createdAt: Date.now() - 1000 * 60 * 60 * 24 * 2,
+    isAnalyzed: true,
+    category: 'Receipt',
+    summary: 'Dinner receipt for 2 people. Total $85.50.',
+    tags: ['dining', 'expenses'],
+    ocrText: 'The Italian Place\nTotal $85.50',
+    entities: { amounts: ['85.50'], dates: [], emails: [], urls: [], phones: [], order_ids: [], merchant: 'The Italian Place' },
+    source: 'upload',
+  },
+  {
+    id: 'demo-2',
+    filename: 'event_poster.png',
+    createdAt: Date.now() - 1000 * 60 * 60 * 24 * 5,
+    isAnalyzed: true,
+    category: 'Other',
+    summary: 'Design Conference 2026 poster. Keynote on October 15th.',
+    tags: ['design', 'networking'],
+    ocrText: 'Design Conf 2026\nOctober 15th',
+    entities: { dates: ['2026-10-15'], amounts: [], emails: [], urls: [], phones: [], order_ids: [] },
+    source: 'upload',
+  }
+];
 
 const FOLLOW_UP_QUERY_RE = /^(why|how|and|more|explain|because|what about|it|this|that|those|them)\b/i;
 const RECENT_SCREENSHOT_QUERY_RE = /\b(upload(?:ed)?|latest|last|recent|new|this|that|it|screenshot|screen)\b/i;
@@ -63,7 +91,8 @@ export default function App() {
   const [selectedScreenshot, setSelectedScreenshot] = useState<ScreenshotMetadata | null>(null);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
-  const [darkMode, setDarkMode] = useState(true);
+  const [darkMode, setDarkMode] = useState(false);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const semanticSearchRequestId = useRef(0);
   const isSemanticSearchActive = semanticResultIds !== null;
 
@@ -109,6 +138,12 @@ export default function App() {
   }, [user?.id]);
 
   useEffect(() => {
+    if (!authLoading && !user) {
+      setScreenshots(DEMO_SCREENSHOTS);
+      setLoading(false);
+      return;
+    }
+
     if (!user) return;
 
     const channel = supabase
@@ -166,7 +201,7 @@ export default function App() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [user]);
+  }, [user, authLoading]);
 
   useEffect(() => {
     if (darkMode) {
@@ -177,6 +212,10 @@ export default function App() {
   }, [darkMode]);
 
   const handleUpload = async (files: File[]) => {
+    if (!user) {
+      setIsAuthModalOpen(true);
+      return;
+    }
     setIsUploading(true);
     for (const file of files) {
       try {
@@ -396,16 +435,18 @@ export default function App() {
     );
   }
 
-  if (!user) {
-    return <LandingPage />;
-  }
-
   return (
     <div className="min-h-screen bg-ink text-bone font-sans selection:bg-accent selection:text-ink transition-colors duration-700">
       <div className="grain-overlay" />
+
+      {!user && (
+        <div className="bg-bone text-ink text-center py-2 text-xs font-semibold">
+          You're exploring in guest mode. <button onClick={() => setIsAuthModalOpen(true)} className="underline decoration-ink/30 hover:decoration-ink/100 transition-colors">Log in</button> to upload and sync archives.
+        </div>
+      )}
       
       {/* Header */}
-      <header className="sticky top-0 z-40 bg-ink/80 backdrop-blur-2xl border-b border-white/5">
+      <header className="sticky top-0 z-40 bg-ink/80 backdrop-blur-xl border-b border-black/5 shadow-sm">
         <div className="max-w-[1600px] mx-auto px-8 h-24 flex items-center justify-between gap-12">
           <div className="flex items-center gap-6 shrink-0">
             <div className="relative group">
@@ -415,10 +456,12 @@ export default function App() {
               <div className="absolute -inset-1 border border-accent/30 -z-10 group-hover:inset-0 transition-all" />
             </div>
             <div className="flex flex-col">
-              <h1 className="text-2xl font-serif italic leading-none tracking-tight">
-                Screen <span className="text-accent">.</span> Sort
+              <h1 className="text-2xl font-sans font-extrabold leading-none tracking-tight">
+                Screen<span className="text-accent">Sort</span>
               </h1>
-              <span className="mono-label mt-1">Intelligent Organization</span>
+              <span className="font-sans text-[10px] uppercase tracking-widest text-bone/80 font-bold mt-1.5 ml-1">
+                Organize automatically, retrieve instantly.
+              </span>
             </div>
           </div>
 
@@ -429,7 +472,7 @@ export default function App() {
               value={searchQuery}
               onChange={(e) => handleSearchInputChange(e.target.value)}
               placeholder="Search by meaning, content, or context..."
-              className="w-full bg-transparent border-b border-white/10 rounded-none py-4 pl-8 pr-20 text-sm focus:border-accent focus:ring-0 transition-all placeholder:text-muted/50"
+              className="w-full bg-transparent border-b border-black/10 rounded-none py-4 pl-8 pr-20 text-sm focus:border-accent focus:ring-0 outline-none transition-all placeholder:text-black/30 font-medium font-sans"
             />
             {isSearching && <Loader2 className="absolute right-0 top-1/2 -translate-y-1/2 w-4 h-4 text-accent animate-spin" />}
             {!isSearching && (searchQuery.trim() || isSemanticSearchActive) && (
@@ -447,15 +490,15 @@ export default function App() {
             <button 
               onClick={() => setCurrentPage(currentPage === 'home' ? 'sources' : 'home')}
               className={cn(
-                "mono-label flex items-center gap-2 transition-all hover:text-accent",
+                "mono-label flex items-center gap-2 transition-all hover:text-accent font-semibold",
                 currentPage === 'sources' && "text-accent"
               )}
             >
               <Cloud className="w-4 h-4" />
               <span className="hidden lg:block">Sources</span>
             </button>
-            <AuthButton />
-            <div className="flex items-center gap-3 px-4 py-2 border border-white/5 bg-white/[0.02]">
+            <AuthButton onSignInClick={() => setIsAuthModalOpen(true)} />
+            <div className="flex items-center gap-3 px-4 py-2 border border-black/5 bg-black/[0.02] rounded-lg">
               <div className={cn("w-1.5 h-1.5 rounded-full", isMockMode ? "bg-amber-500" : "bg-accent")} />
               <span className="mono-label">
                 {isMockMode ? 'Mock' : 'Live'}
@@ -489,14 +532,14 @@ export default function App() {
                 />
               </section>
 
-              <section className="p-8 border border-accent/20 bg-accent/[0.02] relative overflow-hidden group">
+              <section className="p-8 border border-black/5 bg-white shadow-sm relative overflow-hidden group rounded-[var(--radius-editorial)]">
                 <div className="absolute top-0 right-0 w-24 h-24 bg-accent/5 -mr-12 -mt-12 rotate-45 group-hover:scale-150 transition-transform duration-700" />
-                <h4 className="font-serif italic text-xl mb-4 flex items-center gap-2">
+                <h4 className="font-sans font-bold text-xl mb-4 flex items-center gap-2 text-bone">
                   <Sparkles className="w-5 h-5 text-accent" />
-                  Cloud Active
+                  {user ? 'Cloud Active' : 'Explore Mode'}
                 </h4>
-                <p className="text-xs text-muted leading-relaxed font-light">
-                  Your intelligence archive is securely synced across all nodes via Supabase.
+                <p className="text-xs text-muted leading-relaxed font-medium">
+                  {user ? 'Your intelligence archive is securely synced across all nodes via Supabase.' : 'You are exploring guest data. Log in to upload your own screenshots to the cloud.'}
                 </p>
               </section>
             </aside>
@@ -512,14 +555,14 @@ export default function App() {
                 screenshots.length === 0 ? (
                   <div className="h-[60vh] flex flex-col items-center justify-center text-center space-y-12">
                     <div className="relative">
-                      <div className="w-40 h-40 border border-white/5 flex items-center justify-center rotate-45">
-                        <LayoutGrid className="w-16 h-16 text-white/10 -rotate-45" />
+                      <div className="w-40 h-40 border border-black/5 rounded-3xl bg-white flex items-center justify-center rotate-12">
+                        <LayoutGrid className="w-16 h-16 text-black/10 -rotate-12" />
                       </div>
                       <Sparkles className="absolute -top-4 -right-4 w-10 h-10 text-accent animate-pulse" />
                     </div>
                     <div className="space-y-4">
-                      <h2 className="text-5xl font-serif italic">Archive Empty</h2>
-                      <p className="text-muted font-light max-w-sm mx-auto">
+                      <h2 className="text-4xl font-sans font-bold tracking-tight">Archive Empty</h2>
+                      <p className="text-muted font-medium max-w-sm mx-auto">
                         Your intelligence repository is currently void. Ingest screenshots to begin analysis.
                       </p>
                     </div>
@@ -533,12 +576,12 @@ export default function App() {
                 ) : (
                   <div className="h-[60vh] flex flex-col items-center justify-center text-center space-y-8">
                     <div className="relative">
-                      <div className="w-32 h-32 border border-white/5 flex items-center justify-center rotate-45">
-                        <Search className="w-12 h-12 text-white/10 -rotate-45" />
+                      <div className="w-32 h-32 border border-black/5 rounded-3xl bg-white flex items-center justify-center rotate-12">
+                        <Search className="w-12 h-12 text-black/10 -rotate-12" />
                       </div>
                     </div>
                     <div className="space-y-4">
-                      <h2 className="text-5xl font-serif italic">
+                      <h2 className="text-4xl font-sans font-bold tracking-tight">
                         {isSemanticSearchActive ? 'No Search Results' : 'No Matching Screenshots'}
                       </h2>
                       <p className="text-muted font-light max-w-md mx-auto">
@@ -558,16 +601,16 @@ export default function App() {
                 )
               ) : (
                 <div className="space-y-12">
-                  <div className="flex items-end justify-between border-b border-white/5 pb-8">
-                    <h2 className="text-6xl font-serif italic leading-none">
-                      {isSemanticSearchActive ? 'Search Results' : 'Collection'} <span className="text-accent text-2xl align-top">({visibleScreenshots.length})</span>
+                  <div className="flex items-end justify-between border-b border-black/5 pb-6">
+                    <h2 className="text-4xl font-sans font-bold tracking-tight">
+                      {isSemanticSearchActive ? 'Search Results' : 'Collection'} <span className="text-accent text-xl align-top opacity-80">({visibleScreenshots.length})</span>
                     </h2>
                     <div className="mono-label">
                       {isSemanticSearchActive ? `Semantic: ${semanticSearchQuery}` : 'Sorted by Recency'}
                     </div>
                   </div>
                   
-                  <div className="editorial-grid">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6 gap-y-10">
                     <AnimatePresence mode="popLayout">
                       {visibleScreenshots.map((s, idx) => (
                         <motion.div
@@ -623,6 +666,8 @@ export default function App() {
           }
         }}
       />
+
+      <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} />
 
       <ChatDrawer 
         isOpen={isChatOpen} 

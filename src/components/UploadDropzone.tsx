@@ -33,16 +33,16 @@ export const UploadDropzone: React.FC<UploadDropzoneProps> = ({ onUpload, isUplo
     <div 
       {...getRootProps()} 
       className={`
-        relative w-full h-56 border border-dashed flex flex-col items-center justify-center transition-all duration-500 cursor-pointer group
-        ${isDragActive ? 'border-accent bg-accent/5' : 'border-white/10 bg-white/[0.02]'}
-        ${isUploading ? 'opacity-50 cursor-not-allowed' : 'hover:border-white/30 hover:bg-white/[0.04]'}
+        relative w-full h-[250px] border-2 rounded-[var(--radius-editorial)] border-dashed flex flex-col items-center justify-center transition-all duration-300 cursor-pointer group bg-white shadow-sm hover:shadow-md
+        ${isDragActive ? 'border-accent bg-accent/5' : 'border-black/10'}
+        ${isUploading ? 'opacity-50 cursor-not-allowed' : 'hover:border-black/30 hover:bg-black/[0.02]'}
       `}
     >
       <input {...getInputProps()} />
       
       <div className="relative mb-6">
-        <div className="w-16 h-16 border border-white/10 flex items-center justify-center rotate-45 group-hover:rotate-0 transition-transform duration-700">
-          <Upload className={`w-6 h-6 -rotate-45 group-hover:rotate-0 transition-transform duration-700 ${isDragActive ? 'text-accent' : 'text-muted'}`} />
+        <div className="w-16 h-16 border border-black/10 bg-black/5 rounded-2xl flex items-center justify-center rotate-12 group-hover:rotate-0 transition-transform duration-500 shadow-sm">
+          <Upload className={`w-6 h-6 transition-transform duration-500 ${isDragActive ? 'text-accent scale-110' : 'text-bone'}`} />
         </div>
         {isUploading && (
           <div className="absolute inset-0 flex items-center justify-center">
@@ -52,19 +52,19 @@ export const UploadDropzone: React.FC<UploadDropzoneProps> = ({ onUpload, isUplo
       </div>
 
       <div className="text-center px-8 space-y-2">
-        <p className="mono-label text-[10px] text-bone">
-          {isUploading ? 'Analyzing Specimen' : isDragActive ? 'Release to Ingest' : 'Click or Drag to Ingest'}
+        <p className="font-sans font-bold text-base text-bone tracking-tight">
+          {isUploading ? 'Analyzing Specimen...' : isDragActive ? 'Release to Ingest' : 'Click or Drag to Upload'}
         </p>
-        <p className="mono-label text-[8px] opacity-50">
-          Formats: PNG, JPG, WEBP
+        <p className="font-sans font-medium text-xs text-muted">
+          Supports PNG, JPG, WEBP formats.
         </p>
       </div>
 
-      {/* Corner Accents */}
-      <div className="absolute top-0 left-0 w-2 h-2 border-t border-l border-white/20" />
-      <div className="absolute top-0 right-0 w-2 h-2 border-t border-r border-white/20" />
-      <div className="absolute bottom-0 left-0 w-2 h-2 border-b border-l border-white/20" />
-      <div className="absolute bottom-0 right-0 w-2 h-2 border-b border-r border-white/20" />
+      {/* Corner Accents - Remove or adapt to light theme */}
+      <div className="absolute top-2 left-2 w-2 h-2 border-t-2 border-l-2 border-black/10 rounded-tl-sm opacity-0 group-hover:opacity-100 transition-opacity" />
+      <div className="absolute top-2 right-2 w-2 h-2 border-t-2 border-r-2 border-black/10 rounded-tr-sm opacity-0 group-hover:opacity-100 transition-opacity" />
+      <div className="absolute bottom-2 left-2 w-2 h-2 border-b-2 border-l-2 border-black/10 rounded-bl-sm opacity-0 group-hover:opacity-100 transition-opacity" />
+      <div className="absolute bottom-2 right-2 w-2 h-2 border-b-2 border-r-2 border-black/10 rounded-br-sm opacity-0 group-hover:opacity-100 transition-opacity" />
     </div>
   );
 };

@@ -64,15 +64,17 @@ export const Filters: React.FC<FiltersProps> = ({
             key={label}
             onClick={() => onCategoryChange(label)}
             className={cn(
-              "flex items-center justify-between px-4 py-3 transition-all group border-l-2",
+              "flex items-center justify-between px-4 py-3 transition-all group border-2 rounded-xl mb-2",
               activeCategory === label 
-                ? "border-accent bg-accent/5 text-bone" 
-                : "border-white/5 text-muted hover:border-white/20 hover:text-bone"
+                ? "border-accent bg-white shadow-sm text-bone" 
+                : "border-transparent bg-transparent text-muted hover:border-black/5 hover:bg-white hover:text-bone hover:shadow-sm"
             )}
           >
             <div className="flex items-center gap-4">
-              <Icon className={cn("w-4 h-4 transition-colors", activeCategory === label ? "text-accent" : "text-muted group-hover:text-bone")} />
-              <span className="mono-label text-[11px] group-hover:text-bone transition-colors">{label}</span>
+              <Icon className={cn("w-5 h-5 transition-transform duration-300 group-hover:scale-110", activeCategory === label ? "text-accent" : "text-black/60 group-hover:text-bone")} />
+              <span className={cn("font-sans font-extrabold text-sm transition-colors tracking-tight", activeCategory === label ? "text-bone" : "text-black/60 group-hover:text-bone")}>
+                {label}
+              </span>
             </div>
             {activeCategory === label && (
               <div className="w-1 h-1 bg-accent rounded-full" />
@@ -82,31 +84,31 @@ export const Filters: React.FC<FiltersProps> = ({
       </div>
 
       <div className="space-y-4">
-        <h4 className="mono-label text-[10px] px-4">Attributes</h4>
+        <h4 className="mono-label text-[11px] px-4 font-bold tracking-widest text-black/40 mb-3">Attributes</h4>
         <div className="flex flex-col gap-2">
           <button
             onClick={() => setHasAmount(!hasAmount)}
             className={cn(
-              "flex items-center gap-4 px-4 py-3 transition-all border border-white/5",
+              "flex items-center gap-4 px-4 py-3.5 transition-all border-2 rounded-xl group",
               hasAmount 
-                ? "bg-accent text-ink border-accent" 
-                : "text-muted hover:border-white/20 hover:text-bone"
+                ? "bg-accent/10 text-accent border-accent/20 shadow-sm" 
+                : "border-transparent text-black/60 hover:border-black/5 hover:bg-white hover:text-bone hover:shadow-sm"
             )}
           >
-            <DollarSign className="w-4 h-4" />
-            <span className="mono-label text-[10px] text-inherit">Financial Data</span>
+            <DollarSign className={cn("w-5 h-5 transition-transform duration-300 group-hover:scale-110", hasAmount ? "text-accent" : "")} />
+            <span className="font-sans font-extrabold text-sm tracking-tight text-inherit">Financial Data</span>
           </button>
           <button
             onClick={() => setHasUrl(!hasUrl)}
             className={cn(
-              "flex items-center gap-4 px-4 py-3 transition-all border border-white/5",
+              "flex items-center gap-4 px-4 py-3.5 transition-all border-2 rounded-xl group",
               hasUrl 
-                ? "bg-accent text-ink border-accent" 
-                : "text-muted hover:border-white/20 hover:text-bone"
+                ? "bg-accent/10 text-accent border-accent/20 shadow-sm" 
+                : "border-transparent text-black/60 hover:border-black/5 hover:bg-white hover:text-bone hover:shadow-sm"
             )}
           >
-            <LinkIcon className="w-4 h-4" />
-            <span className="mono-label text-[10px] text-inherit">Hyperlinks</span>
+            <LinkIcon className={cn("w-5 h-5 transition-transform duration-300 group-hover:scale-110", hasUrl ? "text-accent" : "")} />
+            <span className="font-sans font-extrabold text-sm tracking-tight text-inherit">Hyperlinks</span>
           </button>
         </div>
       </div>

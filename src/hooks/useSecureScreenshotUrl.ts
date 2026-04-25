@@ -7,6 +7,15 @@ export const useSecureScreenshotUrl = (
   const [imageUrl, setImageUrl] = useState('');
 
   useEffect(() => {
+    if (screenshotId === 'demo-1') {
+      setImageUrl('/demo-receipt.png');
+      return;
+    }
+    if (screenshotId === 'demo-2') {
+      setImageUrl('/demo-poster.png');
+      return;
+    }
+
     if (screenshotId == null) {
       setImageUrl('');
       return;
