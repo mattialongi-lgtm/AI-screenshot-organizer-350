@@ -1,8 +1,12 @@
 type TableResult = { data: any; error: any };
 
+type StorageUploadCall = { bucket: string; path: string; size: number; contentType?: string };
+
 export type SupabaseState = {
   users: Map<string, { id: string; email?: string }>;
   tables: Map<string, TableResult>;
+  inserts: Map<string, any[]>;
+  storageUploads: StorageUploadCall[];
   storageDownload: (bucket: string, path: string) => Promise<TableResult>;
   reset(): void;
 };
@@ -10,10 +14,14 @@ export type SupabaseState = {
 const state: SupabaseState = {
   users: new Map(),
   tables: new Map(),
+  inserts: new Map(),
+  storageUploads: [],
   storageDownload: async () => ({ data: null, error: { message: "not-found" } }),
   reset() {
     this.users.clear();
     this.tables.clear();
+    this.inserts.clear();
+    this.storageUploads.length = 0;
     this.storageDownload = async () => ({
       data: null,
       error: { message: "not-found" },
@@ -23,7 +31,7 @@ const state: SupabaseState = {
 
 export const supabaseState = state;
 
-function makeQueryBuilder(result: TableResult) {
+function makeQueryBuilder(table: string, result: TableResult) {
   const self: any = {
     select: () => self,
     eq: () => self,
@@ -35,8 +43,18 @@ function makeQueryBuilder(result: TableResult) {
     limit: () => self,
     update: () => self,
     delete: () => self,
-    insert: () => self,
-    upsert: () => self,
+    insert: (payload: any) => {
+      const list = state.inserts.get(table) ?? [];
+      list.push(payload);
+      state.inserts.set(table, list);
+      return self;
+    },
+    upsert: (payload: any) => {
+      const list = state.inserts.get(table) ?? [];
+      list.push(payload);
+      state.inserts.set(table, list);
+      return self;
+    },
     maybeSingle: () => Promise.resolve(result),
     single: () => Promise.resolve(result),
     then: (resolve: any, reject: any) => Promise.resolve(result).then(resolve, reject),
@@ -56,11 +74,19 @@ export function supabaseMockModule() {
         },
       },
       from: (table: string) =>
-        makeQueryBuilder(state.tables.get(table) ?? { data: [], error: null }),
+        makeQueryBuilder(table, state.tables.get(table) ?? { data: [], error: null }),
       storage: {
         from: (bucket: string) => ({
           download: (path: string) => state.storageDownload(bucket, path),
-          upload: async () => ({ data: null, error: null }),
+          upload: async (path: string, buffer: Buffer | Uint8Array, opts?: { contentType?: string }) => {
+            state.storageUploads.push({
+              bucket,
+              path,
+              size: (buffer as any)?.length ?? 0,
+              contentType: opts?.contentType,
+            });
+            return { data: { path }, error: null };
+          },
           remove: async () => ({ data: null, error: null }),
           createSignedUrl: async () => ({ data: null, error: null }),
         }),

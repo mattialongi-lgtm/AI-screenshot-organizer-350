@@ -58,6 +58,22 @@ describe("DELETE /api/screenshots/:id", () => {
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/not found/i);
   });
+
+  it("returns 200 when the screenshot belongs to the user", async () => {
+    supabaseState.users.set("valid-token", { id: "user-1" });
+    supabaseState.tables.set("screenshots", {
+      data: { id: "shot-1", storage_path: "user-1/shot-1.png", filename: "user-1/shot-1.png" },
+      error: null,
+    });
+    supabaseState.tables.set("tags", { data: [], error: null });
+
+    const res = await request(app)
+      .delete("/api/screenshots/shot-1")
+      .set("Authorization", "Bearer valid-token");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ success: true });
+  });
 });
 
 describe("GET /api/screenshots/:id/image", () => {
@@ -81,5 +97,45 @@ describe("GET /api/screenshots/:id/image", () => {
 
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/not found/i);
+  });
+
+  it("streams owned screenshot bytes with no-store cache headers", async () => {
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+    supabaseState.users.set("valid-token", { id: "user-1" });
+    supabaseState.tables.set("screenshots", {
+      data: {
+        id: "shot-1",
+        storage_path: "user-1/shot-1.png",
+        filename: "user-1/shot-1.png",
+        original_name: "shot-1.png",
+      },
+      error: null,
+    });
+    supabaseState.storageDownload = async () => ({
+      data: { arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) },
+      error: null,
+    });
+
+    const res = await request(app)
+      .get("/api/screenshots/shot-1/image")
+      .set("Authorization", "Bearer valid-token");
+
+    expect(res.status).toBe(200);
+    expect(res.headers["content-type"]).toMatch(/image\/png/);
+    expect(res.headers["cache-control"]).toMatch(/no-store/);
+    expect(res.headers["x-content-type-options"]).toBe("nosniff");
+    expect(Buffer.from(res.body).equals(bytes)).toBe(true);
+  });
+
+  it("rejects access to another user's screenshot via mismatched user_id filter", async () => {
+    supabaseState.users.set("valid-token", { id: "user-1" });
+    supabaseState.tables.set("screenshots", { data: null, error: null });
+
+    const res = await request(app)
+      .get("/api/screenshots/other-user-shot/image")
+      .set("Authorization", "Bearer valid-token");
+
+    expect(res.status).toBe(404);
   });
 });
