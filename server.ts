@@ -289,14 +289,34 @@ function logRouteError(
   error: unknown,
   details: Record<string, unknown> = {},
 ) {
-  console.error(
-    `[${route}] ${JSON.stringify({
-      requestId,
-      userId: redactUserId(req?.user?.id),
-      ...details,
-      error: serializeError(error),
-    })}`,
-  );
+  const payload = {
+    requestId,
+    userId: redactUserId(req?.user?.id),
+    ...details,
+    error: serializeError(error),
+  };
+  console.error(`[${route}] ${JSON.stringify(payload)}`);
+
+  try {
+    const logsDir = path.join(__dirname, "logs");
+    if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
+    fs.appendFileSync(
+      path.join(logsDir, "server-errors.log"),
+      `${new Date().toISOString()} [${route}] ${JSON.stringify(payload)}\n`,
+    );
+  } catch {
+    // best-effort; don't crash on log persistence failure
+  }
+}
+
+function isDev() {
+  return process.env.NODE_ENV !== "production";
+}
+
+function devErrorDetail(error: unknown) {
+  if (!isDev()) return undefined;
+  const s = serializeError(error);
+  return { message: (s as any).message ?? null, code: (s as any).code ?? null, details: (s as any).details ?? null, hint: (s as any).hint ?? null };
 }
 
 function buildAnalysisPrompt() {
@@ -2092,7 +2112,11 @@ app.post("/api/upload", requireAuth, rateLimit("upload", UPLOAD_REQUEST_LIMIT, U
         stage: "db-insert-failed",
         storagePath,
       });
-      return res.status(500).json({ error: "Failed to persist screenshot. Upload rolled back.", requestId });
+      return res.status(500).json({
+        error: "Failed to persist screenshot. Upload rolled back.",
+        requestId,
+        detail: devErrorDetail(error),
+      });
     }
 
     await replaceScreenshotTagsBestEffort("/api/upload", data.id, analysis.tags);
