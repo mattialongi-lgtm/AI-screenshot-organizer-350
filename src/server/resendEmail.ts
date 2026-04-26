@@ -5,6 +5,7 @@ const resendApiKey = process.env.RESEND_API_KEY;
 const resendFromEmail = process.env.RESEND_FROM_EMAIL;
 const resendReplyTo = process.env.RESEND_REPLY_TO;
 const resendTestRecipient = process.env.RESEND_TEST_RECIPIENT?.trim();
+const defaultResendSandboxRecipient = "mattia.longi@edu.escp.eu";
 
 let resendClient: Resend | null = null;
 
@@ -35,7 +36,10 @@ export async function sendWeeklyDigestEmail(
 
   const resend = getResendClient();
   const html = renderWeeklyDigestHtml(digest);
-  const recipient = resendTestRecipient || to;
+  const usingResendSandboxSender = resendFromEmail.includes("onboarding@resend.dev");
+  const recipient = usingResendSandboxSender
+    ? (resendTestRecipient || defaultResendSandboxRecipient)
+    : (resendTestRecipient || to);
 
   const { data, error } = await resend.emails.send({
     from: resendFromEmail,
