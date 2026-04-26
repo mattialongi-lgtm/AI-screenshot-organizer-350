@@ -513,8 +513,17 @@ export default function App() {
       <div className="grain-overlay" />
 
       {!user && (
-        <div className="bg-bone text-ink text-center py-2 text-xs font-semibold">
-          You're exploring in guest mode. <button onClick={() => setIsAuthModalOpen(true)} className="underline decoration-ink/30 hover:decoration-ink/100 transition-colors">Log in</button> to upload and sync archives.
+        <div className="bg-bone text-ink py-2.5 px-6 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-xs font-semibold">
+          <span className="font-mono uppercase tracking-widest text-[10px] bg-ink text-bone px-2 py-0.5">Guest Mode</span>
+          <span className="text-ink/80 font-medium">
+            Browsing demo screenshots. Uploads, AI chat, reanalysis, and cloud sync are locked.
+          </span>
+          <button
+            onClick={() => setIsAuthModalOpen(true)}
+            className="bg-accent text-ink px-3 py-1 font-bold uppercase tracking-wider text-[10px] hover:bg-ink hover:text-accent transition-colors"
+          >
+            Log in to unlock
+          </button>
         </div>
       )}
       
@@ -618,7 +627,7 @@ export default function App() {
                   {user ? 'Cloud Active' : 'Explore Mode'}
                 </h4>
                 <p className="text-xs text-muted leading-relaxed font-medium">
-                  {user ? 'Your intelligence archive is securely synced across all nodes via Supabase.' : 'You are exploring guest data. Log in to upload your own screenshots to the cloud.'}
+                  {user ? 'Your intelligence archive is securely synced across all nodes via Supabase.' : 'You’re viewing two demo screenshots. Log in to upload your own, run AI analysis and chat, and sync everything to the cloud.'}
                 </p>
               </section>
             </aside>

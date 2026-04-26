@@ -2291,6 +2291,7 @@ app.post("/api/jobs/weekly-digest/run", async (req, res) => {
   try {
     const authHeader = req.get("authorization") || "";
     const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length).trim() : "";
+    const normalizedCronSecret = weeklyDigestCronSecret?.trim() || "";
 
     console.log("[weekly-digest] auth check", JSON.stringify({
       authHeaderPresent: Boolean(authHeader),
@@ -2300,13 +2301,13 @@ app.post("/api/jobs/weekly-digest/run", async (req, res) => {
       bearerCharCodes: bearerToken ? Array.from(bearerToken.slice(-3)).map((char) => char.charCodeAt(0)) : [],
       cronSecretConfigured: Boolean(weeklyDigestCronSecret),
       cronSecretLength: weeklyDigestCronSecret?.length ?? 0,
-      cronSecretPrefix: weeklyDigestCronSecret ? weeklyDigestCronSecret.slice(0, 8) : null,
-      cronSecretSuffix: weeklyDigestCronSecret ? weeklyDigestCronSecret.slice(-8) : null,
-      cronSecretCharCodes: weeklyDigestCronSecret ? Array.from(weeklyDigestCronSecret.slice(-3)).map((char) => char.charCodeAt(0)) : [],
+      cronSecretPrefix: normalizedCronSecret ? normalizedCronSecret.slice(0, 8) : null,
+      cronSecretSuffix: normalizedCronSecret ? normalizedCronSecret.slice(-8) : null,
+      cronSecretCharCodes: normalizedCronSecret ? Array.from(normalizedCronSecret.slice(-3)).map((char) => char.charCodeAt(0)) : [],
       url: req.originalUrl,
     }));
 
-    if (!weeklyDigestCronSecret || bearerToken !== weeklyDigestCronSecret) {
+    if (!normalizedCronSecret || bearerToken !== normalizedCronSecret) {
       return res.status(401).json({ error: "Unauthorized" });
     }
 
