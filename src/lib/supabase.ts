@@ -1,5 +1,5 @@
 import { createClient, User } from '@supabase/supabase-js';
-import { useState, useEffect } from 'react';
+import { useSyncExternalStore } from 'react';
 import { buildApiUrl } from './api';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -12,33 +12,98 @@ export const supabase = createClient(
   supabaseAnonKey || 'placeholder'
 );
 
-export const useSupabaseAuth = () => {
-  const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(isSupabaseConfigured);
-
-  useEffect(() => {
-    if (!isSupabaseConfigured) return;
-
-    // Hard timeout: never block the UI more than 1.5 s waiting for Supabase
-    const timeout = setTimeout(() => {
-      setUser(null);
-      setLoading(false);
-    }, 1500);
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      clearTimeout(timeout);
-      setUser(session?.user ?? null);
-      setLoading(false);
-    });
-
-    return () => {
-      clearTimeout(timeout);
-      subscription.unsubscribe();
-    };
-  }, []);
-
-  return { user, loading };
+type AuthState = {
+  user: User | null;
+  loading: boolean;
 };
+
+const authListeners = new Set<() => void>();
+let authState: AuthState = {
+  user: null,
+  loading: isSupabaseConfigured,
+};
+let authBootstrapPromise: Promise<void> | null = null;
+let authBootstrapStarted = false;
+let initialSessionResolved = false;
+let authRevision = 0;
+
+const emitAuthState = () => {
+  authListeners.forEach((listener) => listener());
+};
+
+const updateAuthState = (nextState: Partial<AuthState>) => {
+  authState = {
+    ...authState,
+    ...nextState,
+  };
+  emitAuthState();
+};
+
+const ensureSupabaseAuthBootstrap = () => {
+  if (authBootstrapStarted) {
+    return authBootstrapPromise ?? Promise.resolve();
+  }
+
+  authBootstrapStarted = true;
+
+  if (!isSupabaseConfigured) {
+    updateAuthState({ user: null, loading: false });
+    return Promise.resolve();
+  }
+
+  updateAuthState({ loading: true });
+
+  const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    authRevision += 1;
+    updateAuthState({
+      user: session?.user ?? null,
+      loading: !initialSessionResolved,
+    });
+  });
+  void subscription;
+
+  authBootstrapPromise = (async () => {
+    const revisionAtStart = authRevision;
+
+    try {
+      const { data, error } = await supabase.auth.getSession();
+      if (error) {
+        throw error;
+      }
+
+      if (authRevision === revisionAtStart) {
+        updateAuthState({ user: data.session?.user ?? null });
+      }
+    } catch (error) {
+      console.error('Failed to load initial Supabase session:', error);
+      if (authRevision === revisionAtStart) {
+        updateAuthState({ user: null });
+      }
+    } finally {
+      initialSessionResolved = true;
+      updateAuthState({ loading: false });
+    }
+  })();
+
+  return authBootstrapPromise;
+};
+
+const subscribeToAuthState = (listener: () => void) => {
+  authListeners.add(listener);
+  void ensureSupabaseAuthBootstrap();
+
+  return () => {
+    authListeners.delete(listener);
+  };
+};
+
+const getAuthSnapshot = () => authState;
+
+export const useSupabaseAuth = () => useSyncExternalStore(
+  subscribeToAuthState,
+  getAuthSnapshot,
+  getAuthSnapshot
+);
 
 export const getAccessToken = async () => {
   const { data, error } = await supabase.auth.getSession();

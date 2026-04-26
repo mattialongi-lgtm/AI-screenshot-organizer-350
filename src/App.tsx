@@ -82,6 +82,8 @@ export default function App() {
   const { user, loading: authLoading } = useSupabaseAuth();
   const [screenshots, setScreenshots] = useState<ScreenshotMetadata[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
   const [semanticResultIds, setSemanticResultIds] = useState<(string | number)[] | null>(null);
@@ -142,49 +144,67 @@ export default function App() {
   useEffect(() => {
     if (!authLoading && !user) {
       setScreenshots(DEMO_SCREENSHOTS);
+      setLoadError(null);
       setLoading(false);
       return;
     }
 
     if (!user) return;
 
-    const channel = supabase
-      .channel('screenshots-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'screenshots',
-          filter: `user_id=eq.${user.id}`
-        },
-        (payload) => {
-          if (payload.eventType === 'INSERT') {
-            const newScreenshot = mapDbToScreenshot(payload.new);
-            setScreenshots(prev => {
-              if (prev.some(s => s.id === newScreenshot.id)) return prev;
-              return [newScreenshot, ...prev];
-            });
-          } else if (payload.eventType === 'UPDATE') {
-            const updated = mapDbToScreenshot(payload.new);
-            setScreenshots(prev => prev.map(s => String(s.id) === String(updated.id) ? { ...s, ...updated } : s));
-          } else if (payload.eventType === 'DELETE') {
-            const deletedId = payload.old.id;
-            setScreenshots(prev => prev.filter(s => String(s.id) !== String(deletedId)));
-          }
-        }
-      )
-      .subscribe();
+    let cancelled = false;
+    setLoading(true);
+    setLoadError(null);
+    setScreenshots([]);
+
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    try {
+      channel = supabase
+        .channel('screenshots-changes')
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'screenshots',
+            filter: `user_id=eq.${user.id}`,
+          },
+          (payload) => {
+            if (cancelled) return;
+            if (payload.eventType === 'INSERT') {
+              const newScreenshot = mapDbToScreenshot(payload.new);
+              setScreenshots(prev => {
+                if (prev.some(s => s.id === newScreenshot.id)) return prev;
+                return [newScreenshot, ...prev];
+              });
+            } else if (payload.eventType === 'UPDATE') {
+              const updated = mapDbToScreenshot(payload.new);
+              setScreenshots(prev => prev.map(s => String(s.id) === String(updated.id) ? { ...s, ...updated } : s));
+            } else if (payload.eventType === 'DELETE') {
+              const deletedId = payload.old.id;
+              setScreenshots(prev => prev.filter(s => String(s.id) !== String(deletedId)));
+            }
+          },
+        )
+        .subscribe();
+    } catch (subscribeError) {
+      console.warn('Realtime subscription failed; continuing without live updates:', subscribeError);
+    }
 
     const fetchCloudScreenshots = async () => {
-      const { data, error } = await supabase
-        .from('screenshots')
-        .select('*, tags(*)')
-        .eq('user_id', user.id)
-        .order('upload_date', { ascending: false });
+      try {
+        const { data, error } = await supabase
+          .from('screenshots')
+          .select('*, tags(*)')
+          .eq('user_id', user.id)
+          .order('upload_date', { ascending: false });
 
-      if (data && !error) {
-        const mappedData = data.map(mapDbToScreenshot);
+        if (cancelled) return;
+
+        if (error) {
+          throw error;
+        }
+
+        const mappedData = (data ?? []).map(mapDbToScreenshot);
         setScreenshots(prev => {
           const combined = [...mappedData];
           prev.forEach(p => {
@@ -194,16 +214,26 @@ export default function App() {
             new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
           );
         });
-        setLoading(false);
+        setLoadError(null);
+      } catch (error) {
+        if (cancelled) return;
+        console.error('Failed to load cloud screenshots:', error);
+        const message = error instanceof Error && error.message ? error.message : 'Unable to load your archive.';
+        setLoadError(message);
+      } finally {
+        if (!cancelled) setLoading(false);
       }
     };
 
-    fetchCloudScreenshots();
+    void fetchCloudScreenshots();
 
     return () => {
-      supabase.removeChannel(channel);
+      cancelled = true;
+      if (channel) {
+        try { supabase.removeChannel(channel); } catch { /* best-effort */ }
+      }
     };
-  }, [user, authLoading]);
+  }, [user, authLoading, loadAttempt]);
 
   useEffect(() => {
     if (darkMode) {
@@ -573,6 +603,20 @@ export default function App() {
                 <div className="h-96 flex flex-col items-center justify-center gap-4">
                   <Loader2 className="w-12 h-12 text-accent animate-spin" />
                   <span className="mono-label animate-pulse">Initializing Archive</span>
+                </div>
+              ) : loadError ? (
+                <div className="h-[60vh] flex flex-col items-center justify-center text-center space-y-6">
+                  <h2 className="text-3xl font-sans font-bold tracking-tight">Archive Unavailable</h2>
+                  <p className="text-muted font-medium max-w-md mx-auto">
+                    Failed to load your archive. {loadError}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setLoadAttempt((n) => n + 1)}
+                    className="accent-button"
+                  >
+                    Retry
+                  </button>
                 </div>
               ) : visibleScreenshots.length === 0 ? (
                 screenshots.length === 0 ? (
