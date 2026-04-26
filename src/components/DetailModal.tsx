@@ -22,9 +22,9 @@ export const DetailModal: React.FC<DetailModalProps> = ({
   onDelete,
   onUpdateTags
 }) => {
-  if (!screenshot) return null;
+  const imageUrl = useSecureScreenshotUrl(screenshot?.id);
 
-  const imageUrl = useSecureScreenshotUrl(screenshot.id);
+  if (!screenshot) return null;
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
