@@ -4,6 +4,7 @@ import { renderWeeklyDigestHtml, type WeeklyDigest } from "./weeklyDigest";
 const resendApiKey = process.env.RESEND_API_KEY;
 const resendFromEmail = process.env.RESEND_FROM_EMAIL;
 const resendReplyTo = process.env.RESEND_REPLY_TO;
+const resendTestRecipient = process.env.RESEND_TEST_RECIPIENT?.trim();
 
 let resendClient: Resend | null = null;
 
@@ -34,10 +35,11 @@ export async function sendWeeklyDigestEmail(
 
   const resend = getResendClient();
   const html = renderWeeklyDigestHtml(digest);
+  const recipient = resendTestRecipient || to;
 
   const { data, error } = await resend.emails.send({
     from: resendFromEmail,
-    to: [to],
+    to: [recipient],
     subject: digest.subject,
     html,
     text: [
