@@ -14,17 +14,20 @@ interface DetailModalProps {
   onClose: () => void;
   onDelete: (id: string | number) => void;
   onUpdateTags: (id: string | number, tags: string[]) => void;
+  isDemo?: boolean;
 }
 
-export const DetailModal: React.FC<DetailModalProps> = ({ 
-  screenshot, 
-  onClose, 
+export const DetailModal: React.FC<DetailModalProps> = ({
+  screenshot,
+  onClose,
   onDelete,
-  onUpdateTags
+  onUpdateTags,
+  isDemo = false,
 }) => {
   const imageUrl = useSecureScreenshotUrl(screenshot?.id);
 
   if (!screenshot) return null;
+  const showDelete = !isDemo && !String(screenshot.id ?? '').startsWith('demo-');
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -149,12 +152,14 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                 <Share2 className="w-4 h-4" />
                 Export
               </button>
-              <button 
-                onClick={() => onDelete(screenshot.id!)}
-                className="w-12 h-12 border border-accent/40 flex items-center justify-center text-accent hover:bg-accent hover:text-ink transition-all"
-              >
-                <Trash2 className="w-5 h-5" />
-              </button>
+              {showDelete && (
+                <button
+                  onClick={() => onDelete(screenshot.id!)}
+                  className="w-12 h-12 border border-accent/40 flex items-center justify-center text-accent hover:bg-accent hover:text-ink transition-all"
+                >
+                  <Trash2 className="w-5 h-5" />
+                </button>
+              )}
             </div>
           </div>
         </motion.div>

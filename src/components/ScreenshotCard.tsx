@@ -14,14 +14,17 @@ interface ScreenshotCardProps {
   onClick: () => void;
   onDelete: (e: React.MouseEvent) => void;
   onReanalyze: (e: React.MouseEvent) => void;
+  isDemo?: boolean;
 }
 
-export const ScreenshotCard: React.FC<ScreenshotCardProps> = ({ 
-  screenshot, 
-  onClick, 
-  onDelete, 
-  onReanalyze 
+export const ScreenshotCard: React.FC<ScreenshotCardProps> = ({
+  screenshot,
+  onClick,
+  onDelete,
+  onReanalyze,
+  isDemo = false,
 }) => {
+  const showActions = !isDemo && !String(screenshot.id ?? '').startsWith('demo-');
   const imageUrl = useSecureScreenshotUrl(screenshot.id);
 
   return (
@@ -57,18 +60,22 @@ export const ScreenshotCard: React.FC<ScreenshotCardProps> = ({
             <button className="w-12 h-12 border border-white/20 flex items-center justify-center text-bone hover:bg-bone hover:text-ink transition-all">
               <Eye className="w-5 h-5" />
             </button>
-            <button 
-              onClick={onReanalyze}
-              className="w-12 h-12 border border-white/20 flex items-center justify-center text-bone hover:bg-bone hover:text-ink transition-all"
-            >
-              <RefreshCw className="w-5 h-5" />
-            </button>
-            <button 
-              onClick={onDelete}
-              className="w-12 h-12 border border-accent/40 flex items-center justify-center text-accent hover:bg-accent hover:text-ink transition-all"
-            >
-              <Trash2 className="w-5 h-5" />
-            </button>
+            {showActions && (
+              <>
+                <button
+                  onClick={onReanalyze}
+                  className="w-12 h-12 border border-white/20 flex items-center justify-center text-bone hover:bg-bone hover:text-ink transition-all"
+                >
+                  <RefreshCw className="w-5 h-5" />
+                </button>
+                <button
+                  onClick={onDelete}
+                  className="w-12 h-12 border border-accent/40 flex items-center justify-center text-accent hover:bg-accent hover:text-ink transition-all"
+                >
+                  <Trash2 className="w-5 h-5" />
+                </button>
+              </>
+            )}
           </div>
           <span className="mono-label text-[8px]">Inspect Specimen</span>
         </div>

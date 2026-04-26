@@ -46,13 +46,11 @@ export const mapDbToScreenshot = (dbData: any): ScreenshotMetadata => {
     entities: normalizeEntities(dbData.entities),
     embedding: dbData.embedding,
     source,
-    isAnalyzed: !!(
-      dbData.is_analyzed === 1 || 
-      dbData.is_analyzed === true || 
-      dbData.isAnalyzed === 1 || 
-      dbData.isAnalyzed === true || 
-      (dbData.summary && dbData.summary.length > 5) ||
-      (dbData.ocr_text && dbData.ocr_text.length > 0)
+    isAnalyzed: (
+      dbData.is_analyzed === 1 ||
+      dbData.is_analyzed === true ||
+      dbData.isAnalyzed === 1 ||
+      dbData.isAnalyzed === true
     ),
     isSensitive: !!(dbData.isSensitive || dbData.is_sensitive === 1 || dbData.is_sensitive === true),
     safetyReason: dbData.safetyReason || dbData.safety_reason || '',

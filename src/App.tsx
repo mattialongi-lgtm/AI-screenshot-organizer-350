@@ -236,6 +236,12 @@ export default function App() {
   }, [user, authLoading, loadAttempt]);
 
   useEffect(() => {
+    if (!user && currentPage === 'sources') {
+      setCurrentPage('home');
+    }
+  }, [user, currentPage]);
+
+  useEffect(() => {
     if (darkMode) {
       document.documentElement.classList.add('dark');
     } else {
@@ -291,6 +297,10 @@ export default function App() {
   });
 
   const handleDelete = async (id: string | number) => {
+    if (!user) {
+      setIsAuthModalOpen(true);
+      return;
+    }
     if (!confirm("Are you sure you want to delete this screenshot?")) {
       return;
     }
@@ -317,6 +327,10 @@ export default function App() {
 
   const handleReanalyze = async (e: React.MouseEvent, s: ScreenshotMetadata) => {
     e.stopPropagation();
+    if (!user) {
+      setIsAuthModalOpen(true);
+      return;
+    }
     if (!s.id) return;
     setScreenshots(prev => prev.map(item => String(item.id) === String(s.id) ? { ...item, isAnalyzed: false } : item));
     try {
@@ -409,6 +423,12 @@ export default function App() {
   };
 
   const handleChat = async (text: string, history: ChatMessage[]) => {
+    if (!user) {
+      return {
+        answer: "Chat is available after you log in. Sign in to query your own archive — the demo screenshots are read-only.",
+        used_ids: [],
+      };
+    }
     const normalizedText = text.trim().toLowerCase();
     const recentScreenshots = [...screenshots].sort((a, b) => b.createdAt - a.createdAt);
     const latestScreenshot = recentScreenshots[0];
@@ -540,8 +560,14 @@ export default function App() {
           </form>
 
           <div className="flex items-center gap-8 shrink-0">
-            <button 
-              onClick={() => setCurrentPage(currentPage === 'home' ? 'sources' : 'home')}
+            <button
+              onClick={() => {
+                if (!user) {
+                  setIsAuthModalOpen(true);
+                  return;
+                }
+                setCurrentPage(currentPage === 'home' ? 'sources' : 'home');
+              }}
               className={cn(
                 "mono-label flex items-center gap-2 transition-all hover:text-accent font-semibold",
                 currentPage === 'sources' && "text-accent"
@@ -686,8 +712,9 @@ export default function App() {
                           animate={{ opacity: 1, y: 0 }}
                           transition={{ delay: idx * 0.05 }}
                         >
-                          <ScreenshotCard 
-                            screenshot={s} 
+                          <ScreenshotCard
+                            screenshot={s}
+                            isDemo={!user}
                             onClick={() => setSelectedScreenshot(s)}
                             onDelete={(e) => { e.stopPropagation(); handleDelete(s.id!); }}
                             onReanalyze={(e) => handleReanalyze(e, s)}
@@ -704,8 +731,14 @@ export default function App() {
       </main>
 
       {/* Floating AI Button */}
-      <button 
-        onClick={() => setIsChatOpen(true)}
+      <button
+        onClick={() => {
+          if (!user) {
+            setIsAuthModalOpen(true);
+            return;
+          }
+          setIsChatOpen(true);
+        }}
         className="fixed bottom-12 right-12 w-20 h-20 bg-accent text-ink flex items-center justify-center transition-all hover:scale-110 active:scale-95 group z-30 shadow-[0_0_30px_rgba(255,77,0,0.3)]"
       >
         <Sparkles className="w-8 h-8 group-hover:rotate-12 transition-transform duration-500" />
@@ -715,11 +748,13 @@ export default function App() {
       </button>
 
       {/* Modals & Drawers */}
-      <DetailModal 
-        screenshot={selectedScreenshot} 
+      <DetailModal
+        screenshot={selectedScreenshot}
+        isDemo={!user}
         onClose={() => setSelectedScreenshot(null)}
         onDelete={handleDelete}
         onUpdateTags={async (id, tags) => {
+          if (!user) return;
           const s = screenshots.find(sc => sc.id === id);
           if (s) {
             const updated = { ...s, tags };
@@ -729,7 +764,7 @@ export default function App() {
               .from('screenshots')
               .update(dbUpdate)
               .eq('id', id)
-              .eq('user_id', user!.id);
+              .eq('user_id', user.id);
           }
         }}
       />
