@@ -2225,7 +2225,7 @@ app.get("/api/automation/weekly-digest/preview", requireAuth, async (req, res) =
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const { data, error } = await supabase
       .from("screenshots")
-      .select("category, summary, entities, upload_date, created_at")
+      .select("category, summary, entities, upload_date")
       .eq("user_id", req.user.id)
       .gte("upload_date", sevenDaysAgo)
       .order("upload_date", { ascending: false });
@@ -2258,7 +2258,7 @@ app.post("/api/automation/weekly-digest/send-test", requireAuth, rateLimit("week
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const { data, error } = await supabase
       .from("screenshots")
-      .select("category, summary, entities, upload_date, created_at")
+      .select("category, summary, entities, upload_date")
       .eq("user_id", req.user.id)
       .gte("upload_date", sevenDaysAgo)
       .order("upload_date", { ascending: false });
@@ -2359,7 +2359,7 @@ app.post("/api/jobs/weekly-digest/run", async (req, res) => {
 
         const { data: screenshots, error: screenshotError } = await supabase
           .from("screenshots")
-          .select("category, summary, entities, upload_date, created_at")
+          .select("category, summary, entities, upload_date")
           .eq("user_id", user.id)
           .gte("upload_date", sevenDaysAgo)
           .order("upload_date", { ascending: false });
