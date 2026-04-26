@@ -7,6 +7,7 @@ import React, { useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { Upload, Sparkles } from 'lucide-react';
 import { motion } from 'motion/react';
+import { MANUAL_UPLOAD_BATCH_LIMIT } from '../shared/uploadLimits';
 
 interface UploadDropzoneProps {
   onUpload: (files: File[]) => void;
@@ -15,9 +16,9 @@ interface UploadDropzoneProps {
 
 export const UploadDropzone: React.FC<UploadDropzoneProps> = ({ onUpload, isUploading }) => {
   const onDrop = useCallback((acceptedFiles: File[]) => {
-    if (acceptedFiles.length > 40) {
-      alert("Batch limit exceeded: You can only upload a maximum of 40 screenshots at once. Processing the first 40.");
-      onUpload(acceptedFiles.slice(0, 40));
+    if (acceptedFiles.length > MANUAL_UPLOAD_BATCH_LIMIT) {
+      alert(`Batch limit exceeded: You can only upload a maximum of ${MANUAL_UPLOAD_BATCH_LIMIT} screenshots at once. Processing the first ${MANUAL_UPLOAD_BATCH_LIMIT}.`);
+      onUpload(acceptedFiles.slice(0, MANUAL_UPLOAD_BATCH_LIMIT));
     } else {
       onUpload(acceptedFiles);
     }

@@ -43,6 +43,7 @@ import { mapDbToScreenshot, mapScreenshotToDb } from './lib/mapping';
 import { AuthModal } from './components/AuthModal';
 import { buildWebSocketUrl } from './lib/api';
 import { applyStructuredFilters, getScreenshotsByIds } from './lib/screenshotFilters';
+import { formatUploadWindowMinutes, MANUAL_UPLOAD_BATCH_LIMIT } from './shared/uploadLimits';
 
 const DEMO_SCREENSHOTS: ScreenshotMetadata[] = [
   {
@@ -73,7 +74,8 @@ const DEMO_SCREENSHOTS: ScreenshotMetadata[] = [
 ];
 
 const FOLLOW_UP_QUERY_RE = /^(why|how|and|more|explain|because|what about|it|this|that|those|them)\b/i;
-const RECENT_SCREENSHOT_QUERY_RE = /\b(upload(?:ed)?|latest|last|recent|new|this|that|it|screenshot|screen)\b/i;
+const RECENT_SCREENSHOT_QUERY_RE = /\b(upload(?:ed)?|latest|last|recent|new|this|that|it|screenshots?|screens?)\b/i;
+const BROAD_SCOPE_QUERY_RE = /\b(these|those|all|every|my|the|any)\b.{0,20}\b(screenshots?|images?|files?|archive|things?)\b/i;
 
 export default function App() {
   const [currentPage, setCurrentPage] = useState<'home' | 'sources'>('home');
@@ -217,6 +219,7 @@ export default function App() {
       return;
     }
     setIsUploading(true);
+    let uploadedCount = 0;
     for (const file of files) {
       try {
         const { screenshot: row } = await uploadScreenshot(file);
@@ -227,9 +230,17 @@ export default function App() {
           }
           return [mapped, ...prev];
         });
+        uploadedCount += 1;
       } catch (err: any) {
         console.error("Upload failed:", err);
-        alert(`Upload Error: ${err.message || JSON.stringify(err)}`);
+        const message = err?.message || JSON.stringify(err);
+        if (typeof message === 'string' && message.includes('429')) {
+          alert(
+            `Upload limit reached: you can upload up to ${MANUAL_UPLOAD_BATCH_LIMIT} screenshots every ${formatUploadWindowMinutes()} minutes. Uploaded ${uploadedCount} file${uploadedCount === 1 ? '' : 's'} before the limit was hit.`
+          );
+          break;
+        }
+        alert(`Upload Error: ${message}`);
       }
     }
     setIsUploading(false);
@@ -381,11 +392,19 @@ export default function App() {
     const previousContext = getScreenshotsByIds(screenshots, previousReferencedIds);
     const isFollowUp = normalizedText.split(/\s+/).filter(Boolean).length <= 3 || FOLLOW_UP_QUERY_RE.test(normalizedText);
     const refersToLatestScreenshot = RECENT_SCREENSHOT_QUERY_RE.test(normalizedText);
+    const refersToBroadScope = BROAD_SCOPE_QUERY_RE.test(normalizedText);
+    const recentAnalyzed = recentScreenshots.filter(
+      (screenshot) => screenshot.isAnalyzed && Boolean(screenshot.summary.trim() || screenshot.ocrText.trim()),
+    );
 
     let relevant: ScreenshotMetadata[] = [];
 
     if (isFollowUp && previousContext.length > 0) {
       relevant = previousContext;
+    }
+
+    if (relevant.length === 0 && refersToBroadScope && recentAnalyzed.length > 0) {
+      relevant = recentAnalyzed.slice(0, 5);
     }
 
     if (relevant.length === 0) {
@@ -415,6 +434,10 @@ export default function App() {
       if (latestAnalyzedScreenshot) {
         relevant = [latestAnalyzedScreenshot];
       }
+    }
+
+    if (relevant.length === 0 && recentAnalyzed.length > 0) {
+      relevant = recentAnalyzed.slice(0, 5);
     }
 
     if (relevant.length === 0) {

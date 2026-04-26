@@ -10,6 +10,7 @@ import { fileURLToPath } from "url";
 import crypto from "crypto";
 import { buildWeeklyDigest } from "./src/server/weeklyDigest";
 import { isResendConfigured, sendWeeklyDigestEmail } from "./src/server/resendEmail";
+import { UPLOAD_RATE_LIMIT_WINDOW_MS, UPLOAD_REQUEST_LIMIT } from "./src/shared/uploadLimits";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -2022,7 +2023,7 @@ app.post("/api/sync", requireAuth, rateLimit("sync", 5, 15 * 60 * 1000), async (
 });
 
 // API Routes
-app.post("/api/upload", requireAuth, rateLimit("upload", 20, 15 * 60 * 1000), (req, res, next) => {
+app.post("/api/upload", requireAuth, rateLimit("upload", UPLOAD_REQUEST_LIMIT, UPLOAD_RATE_LIMIT_WINDOW_MS), (req, res, next) => {
   upload.single("screenshot")(req, res, (err) => {
     if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
       return res.status(413).json({ error: "File too large. Maximum 10 MB per upload." });

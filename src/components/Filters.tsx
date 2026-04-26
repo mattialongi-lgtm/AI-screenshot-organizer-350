@@ -62,6 +62,7 @@ export const Filters: React.FC<FiltersProps> = ({
         {CATEGORIES.map(({ label, icon: Icon }) => (
           <button
             key={label}
+            type="button"
             onClick={() => onCategoryChange(label)}
             className={cn(
               "flex items-center justify-between px-4 py-3 transition-all group border-2 rounded-xl mb-2",
@@ -87,6 +88,7 @@ export const Filters: React.FC<FiltersProps> = ({
         <h4 className="mono-label text-[11px] px-4 font-bold tracking-widest text-black/40 mb-3">Attributes</h4>
         <div className="flex flex-col gap-2">
           <button
+            type="button"
             onClick={() => setHasAmount(!hasAmount)}
             className={cn(
               "flex items-center gap-4 px-4 py-3.5 transition-all border-2 rounded-xl group",
@@ -99,6 +101,7 @@ export const Filters: React.FC<FiltersProps> = ({
             <span className="font-sans font-extrabold text-sm tracking-tight text-inherit">Financial Data</span>
           </button>
           <button
+            type="button"
             onClick={() => setHasUrl(!hasUrl)}
             className={cn(
               "flex items-center gap-4 px-4 py-3.5 transition-all border-2 rounded-xl group",
