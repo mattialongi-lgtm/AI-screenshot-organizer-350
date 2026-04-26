@@ -5,6 +5,26 @@
 
 import { ScreenshotMetadata, Category } from '../types';
 
+const asStringArray = (val: unknown): string[] =>
+  Array.isArray(val) ? val.filter((x): x is string => typeof x === 'string' && x.trim().length > 0) : [];
+
+const normalizeEntities = (raw: any): ScreenshotMetadata['entities'] => {
+  let src: any = raw;
+  if (typeof src === 'string') {
+    try { src = JSON.parse(src); } catch { src = null; }
+  }
+  src = src && typeof src === 'object' ? src : {};
+  return {
+    dates: asStringArray(src.dates),
+    amounts: asStringArray(src.amounts),
+    emails: asStringArray(src.emails),
+    urls: asStringArray(src.urls),
+    phones: asStringArray(src.phones),
+    order_ids: asStringArray(src.order_ids),
+    merchant: typeof src.merchant === 'string' ? src.merchant : undefined,
+  };
+};
+
 export const mapDbToScreenshot = (dbData: any): ScreenshotMetadata => {
   const userId = dbData.userId || dbData.user_id;
   const storagePath = dbData.storagePath || dbData.storage_path || dbData.filename;
@@ -23,7 +43,7 @@ export const mapDbToScreenshot = (dbData: any): ScreenshotMetadata => {
     summary: dbData.summary || '',
     category: (dbData.category || 'Other') as Category,
     tags: Array.isArray(dbData.tags) ? dbData.tags.map((t: any) => typeof t === 'string' ? t : t.tag) : [],
-    entities: dbData.entities || { dates: [], amounts: [], emails: [], urls: [], phones: [], order_ids: [] },
+    entities: normalizeEntities(dbData.entities),
     embedding: dbData.embedding,
     source,
     isAnalyzed: !!(
