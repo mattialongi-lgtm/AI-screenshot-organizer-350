@@ -1,7 +1,7 @@
 import type { CloudSource, SourceSettings } from "../types";
 
 export const defaultSourceSettings: SourceSettings = {
-  keywords: ["screenshot", "screen shot", "screenshots", "IMG_"],
+  keywords: ["screenshot", "Screenshot", "screen shot", "Screen Shot", "screenshots", "Schermata", "schermata", "IMG_"],
   dateRangeDays: 30,
   maxFiles: 200,
   autoSyncEnabled: false,
@@ -55,11 +55,23 @@ export function extractSyncError(payload: any): string | null {
 
 export function buildSyncSummary(payload: any): string {
   const first = Array.isArray(payload?.results) ? payload.results[0] : null;
-  return [
+  const summary = [
     `Imported ${payload?.syncedCount || 0} new screenshot(s).`,
+    first?.found ? `Found ${first.found} Drive image candidate(s).` : null,
     first?.skipped ? `Skipped ${first.skipped}.` : null,
     first?.errors ? `Errors ${first.errors}.` : null,
   ]
     .filter(Boolean)
     .join(" ");
+
+  const errorDetails = first?.errorDetails;
+  if (errorDetails && Array.isArray(errorDetails) && errorDetails.length > 0) {
+    const errorLines = errorDetails
+      .slice(0, 3)
+      .map((err: any) => `• ${err.fileId}: ${err.message}`)
+      .join("\n");
+    return `${summary}\n\nFailed files:\n${errorLines}${errorDetails.length > 3 ? `\n... and ${errorDetails.length - 3} more` : ""}`;
+  }
+
+  return summary;
 }

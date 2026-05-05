@@ -9,7 +9,8 @@ import {
   Sparkles,
   Loader2,
   ShieldAlert,
-  LayoutGrid
+  LayoutGrid,
+  Trash2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -325,6 +326,49 @@ export default function App() {
     }
   };
 
+  const handleClearAll = async () => {
+    if (!user) {
+      setIsAuthModalOpen(true);
+      return;
+    }
+
+    const count = screenshots.length;
+    if (count === 0) {
+      alert('No screenshots to clear.');
+      return;
+    }
+
+    if (!confirm(`Clear all ${count} screenshot${count === 1 ? '' : 's'}? This cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      const idsToDelete = screenshots.map(s => String(s.id));
+      let deletedCount = 0;
+
+      for (const id of idsToDelete) {
+        try {
+          const res = await authenticatedFetch(`/api/screenshots/${encodeURIComponent(id)}`, {
+            method: 'DELETE',
+          });
+
+          if (res.ok) {
+            deletedCount += 1;
+            setScreenshots(prev => prev.filter(s => String(s.id) !== id));
+          }
+        } catch (err) {
+          console.error('Error deleting screenshot:', id, err);
+        }
+      }
+
+      setSelectedScreenshot(null);
+      alert(`Cleared ${deletedCount} screenshot${deletedCount === 1 ? '' : 's'}.`);
+    } catch (err: any) {
+      console.error('Clear all failed:', err);
+      alert(`Clear Error: ${err.message || JSON.stringify(err)}`);
+    }
+  };
+
   const handleReanalyze = async (e: React.MouseEvent, s: ScreenshotMetadata) => {
     e.stopPropagation();
     if (!user) {
@@ -610,8 +654,8 @@ export default function App() {
 
               <section>
                 <h3 className="mono-label mb-8">Refine</h3>
-                <Filters 
-                  activeCategory={activeCategory} 
+                <Filters
+                  activeCategory={activeCategory}
                   onCategoryChange={setActiveCategory}
                   hasAmount={hasAmount}
                   setHasAmount={setHasAmount}
@@ -619,6 +663,19 @@ export default function App() {
                   setHasUrl={setHasUrl}
                 />
               </section>
+
+              {user && screenshots.length > 0 && (
+                <section>
+                  <h3 className="mono-label mb-8">Actions</h3>
+                  <button
+                    onClick={handleClearAll}
+                    className="w-full px-6 py-3 border border-amber-500/30 bg-amber-500/5 text-amber-600 hover:bg-amber-500/10 transition-colors flex items-center justify-center gap-2 text-sm font-medium rounded-lg"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    Clear All
+                  </button>
+                </section>
+              )}
 
               <section className="p-8 border border-black/5 bg-white shadow-sm relative overflow-hidden group rounded-[var(--radius-editorial)]">
                 <div className="absolute top-0 right-0 w-24 h-24 bg-accent/5 -mr-12 -mt-12 rotate-45 group-hover:scale-150 transition-transform duration-700" />

@@ -110,7 +110,7 @@ const GOOGLE_DRIVE_SCOPES = [
   "profile",
 ] as const;
 const DEFAULT_SOURCE_SETTINGS = {
-  keywords: ["screenshot", "screen shot", "screenshots", "IMG_"],
+  keywords: ["screenshot", "Screenshot", "screen shot", "Screen Shot", "screenshots", "Schermata", "schermata", "IMG_"],
   dateRangeDays: 30,
   maxFiles: 200,
   autoSyncEnabled: false,
@@ -539,6 +539,15 @@ function resolveMimeType(filename: string, fallback?: string | null) {
 
 function escapeDriveQueryValue(value: string) {
   return value.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+}
+
+function addUniqueDriveFiles(target: any[], files: any[] = []) {
+  const seen = new Set(target.map((file) => file?.id).filter(Boolean));
+  for (const file of files) {
+    if (!file?.id || seen.has(file.id)) continue;
+    target.push(file);
+    seen.add(file.id);
+  }
 }
 
 function parseSourceSettings(settings: any) {
@@ -1907,33 +1916,63 @@ app.post("/api/sync", requireAuth, rateLimit("sync", 5, 15 * 60 * 1000), async (
           discoveryClauses.push(`(${filenameKeywordClauses.join(" or ")})`);
         }
 
-        let q = `trashed = false and (mimeType contains 'image/' or mimeType = 'application/octet-stream') and modifiedTime > '${rfc3339Date}'`;
-
-        if (discoveryClauses.length > 0) {
-          q += ` and (${discoveryClauses.join(" or ")})`;
-        }
+        const imageFileClause = "(mimeType contains 'image/' or mimeType = 'application/octet-stream')";
+        const recentClause = `(modifiedTime > '${rfc3339Date}' or createdTime > '${rfc3339Date}')`;
+        const discoveryClause = discoveryClauses.length > 0 ? `(${discoveryClauses.join(" or ")})` : "";
+        const queryCandidates = [
+          discoveryClause
+            ? {
+                label: "recent screenshot-like images",
+                q: `trashed = false and ${imageFileClause} and ${recentClause} and ${discoveryClause}`,
+              }
+            : null,
+          {
+            label: "recent Drive images",
+            q: `trashed = false and ${imageFileClause} and ${recentClause}`,
+          },
+          discoveryClause
+            ? {
+                label: "older screenshot-like images",
+                q: `trashed = false and ${imageFileClause} and ${discoveryClause}`,
+              }
+            : null,
+          {
+            label: "latest Drive images",
+            q: `trashed = false and ${imageFileClause}`,
+          },
+        ].filter(Boolean) as Array<{ label: string; q: string }>;
 
         const files: any[] = [];
-        let pageToken: string | undefined;
-        do {
-          const response = await drive.files.list({
-            q,
-            fields: "nextPageToken, files(id, name, mimeType, modifiedTime, webViewLink)",
-            pageSize: Math.min(100, maxFiles - files.length),
-            pageToken,
-            orderBy: "modifiedTime desc",
-            includeItemsFromAllDrives: true,
-            supportsAllDrives: true,
-            spaces: "drive",
-          });
+        let matchedQueryLabel = "";
 
-          files.push(...(response.data.files || []));
-          pageToken = response.data.nextPageToken ?? undefined;
-        } while (pageToken && files.length < maxFiles);
+        for (const candidate of queryCandidates) {
+          let pageToken: string | undefined;
+          do {
+            const response = await drive.files.list({
+              q: candidate.q,
+              fields: "nextPageToken, files(id, name, mimeType, modifiedTime, createdTime, webViewLink)",
+              pageSize: Math.min(100, maxFiles - files.length),
+              pageToken,
+              orderBy: "modifiedTime desc",
+              includeItemsFromAllDrives: true,
+              supportsAllDrives: true,
+              spaces: "drive",
+            });
+
+            addUniqueDriveFiles(files, response.data.files || []);
+            pageToken = response.data.nextPageToken ?? undefined;
+          } while (pageToken && files.length < maxFiles);
+
+          if (files.length > 0) {
+            matchedQueryLabel = candidate.label;
+            break;
+          }
+        }
 
         let sourceSynced = 0;
         let sourceSkipped = 0;
         let sourceErrors = 0;
+        const sourceErrorDetails: Array<{ fileId: string; message: string }> = [];
 
         for (const file of files) {
           // Check if already synced
@@ -2017,7 +2056,9 @@ app.post("/api/sync", requireAuth, rateLimit("sync", 5, 15 * 60 * 1000), async (
               })
             });
           } catch (err) {
+            const errorMessage = err instanceof Error ? err.message : String(err);
             console.error(`Failed to sync file ${file.id}:`, err);
+            sourceErrorDetails.push({ fileId: file.id!, message: errorMessage });
             sourceErrors++;
           }
         }
@@ -2027,7 +2068,15 @@ app.post("/api/sync", requireAuth, rateLimit("sync", 5, 15 * 60 * 1000), async (
           .eq('id', source.id)
           .eq('user_id', req.user.id);
 
-        results.push({ provider: 'googleDrive', synced: sourceSynced, skipped: sourceSkipped, errors: sourceErrors });
+        results.push({
+          provider: 'googleDrive',
+          synced: sourceSynced,
+          skipped: sourceSkipped,
+          errors: sourceErrors,
+          found: files.length,
+          discovery: matchedQueryLabel || "no Drive image candidates found",
+          ...(sourceErrorDetails.length > 0 && { errorDetails: sourceErrorDetails }),
+        });
       } catch (err) {
         console.error("Google Drive sync failed:", err);
         await setGoogleSourceStatus(source.id, req.user.id, "error");

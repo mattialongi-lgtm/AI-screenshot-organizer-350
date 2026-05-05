@@ -6,7 +6,14 @@
       "Bash(node -e \"console.log\\('GOOGLE_OAUTH_STATE_SECRET=' + require\\('crypto'\\).randomBytes\\(32\\).toString\\('hex'\\)\\); console.log\\('AGENT_TOKEN_SECRET=' + require\\('crypto'\\).randomBytes\\(32\\).toString\\('hex'\\)\\)\")",
       "Bash(npm install *)",
       "Bash(npm test *)",
-      "Bash(npx vitest *)"
+      "Bash(npx vitest *)",
+      "Bash(curl -s http://localhost:3000)",
+      "Bash(curl -s \"http://localhost:3000/api/sync\")",
+      "Read(//tmp/**)",
+      "Bash(curl -s http://localhost:3000/api/screenshots -H \"Content-Type: application/json\" -X GET)",
+      "Bash(pkill -f \"npm run dev\\\\|tsx server\")",
+      "Bash(awk '{print $2}')",
+      "Bash(git -C \"c:\\\\Users\\\\dearm\\\\OneDrive\\\\Desktop\\\\AI-screenshot-organizer-350\" diff src/App.tsx)"
     ]
   }
 }
