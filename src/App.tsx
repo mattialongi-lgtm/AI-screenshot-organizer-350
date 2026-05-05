@@ -127,6 +127,9 @@ export default function App() {
               if (prev.some(s => s.id === newScreenshot.id)) return prev;
               return [newScreenshot, ...prev];
             });
+          } else if (message.type === 'google:updateFile') {
+            const updatedScreenshot = message.data;
+            setScreenshots(prev => prev.map(s => s.id === updatedScreenshot.id ? { ...s, ...updatedScreenshot } : s));
           }
         } catch (e) {
           console.error("WS message error:", e);
@@ -761,9 +764,17 @@ export default function App() {
               ) : (
                 <div className="space-y-12">
                   <div className="flex items-end justify-between border-b border-black/5 pb-6">
-                    <h2 className="text-4xl font-sans font-bold tracking-tight">
-                      {isSemanticSearchActive ? 'Search Results' : 'Collection'} <span className="text-accent text-xl align-top opacity-80">({visibleScreenshots.length})</span>
-                    </h2>
+                    <div className="space-y-2">
+                      <h2 className="text-4xl font-sans font-bold tracking-tight">
+                        {isSemanticSearchActive ? 'Search Results' : 'Collection'} <span className="text-accent text-xl align-top opacity-80">({visibleScreenshots.length})</span>
+                      </h2>
+                      {screenshots.length > 0 && screenshots.some(s => !s.isAnalyzed) && (
+                        <div className="text-sm font-medium text-amber-600 flex items-center gap-2">
+                          <div className="w-2 h-2 bg-amber-500 rounded-full animate-pulse" />
+                          Analyzing: {screenshots.filter(s => s.isAnalyzed).length} of {screenshots.length} complete
+                        </div>
+                      )}
+                    </div>
                     <div className="mono-label">
                       {isSemanticSearchActive ? `Semantic: ${semanticSearchQuery}` : 'Sorted by Recency'}
                     </div>

@@ -2002,12 +2002,8 @@ app.post("/api/sync", requireAuth, rateLimit("sync", 5, 15 * 60 * 1000), async (
               buffer,
               resolveMimeType(file.name || `${file.id}.png`, file.mimeType),
             );
-            const analysis = await analyzeScreenshot(
-              buffer,
-              resolveMimeType(file.name || `${file.id}.png`, file.mimeType),
-            );
-            const embedding = await generateEmbedding(analysis.summary + " " + analysis.ocr_text);
 
+            // Insert screenshot without analysis first
             const { data: insertedScreenshot, error: insError } = await supabase
               .from('screenshots')
               .insert([{
@@ -2015,15 +2011,14 @@ app.post("/api/sync", requireAuth, rateLimit("sync", 5, 15 * 60 * 1000), async (
                 filename: storagePath,
                 storage_path: storagePath,
                 original_name: file.name,
-                category: analysis.category,
-                summary: analysis.summary,
-                ocr_text: analysis.ocr_text,
-                entities: analysis.entities,
-                embedding: embedding,
-                is_sensitive: analysis.safety?.contains_sensitive ? 1 : 0,
-                is_analyzed: 1,
-                safety_reason: analysis.safety?.reason || "",
-                last_analyzed_at: new Date().toISOString(),
+                category: 'Unanalyzed',
+                summary: '',
+                ocr_text: '',
+                entities: null,
+                embedding: null,
+                is_sensitive: 0,
+                is_analyzed: 0,
+                safety_reason: '',
                 source_id: source.id,
                 external_id: file.id,
                 upload_date: file.modifiedTime || new Date().toISOString(),
@@ -2041,13 +2036,12 @@ app.post("/api/sync", requireAuth, rateLimit("sync", 5, 15 * 60 * 1000), async (
               await removeStorageObjectBestEffort(storagePath);
               throw insError || new Error("Google Drive screenshot insert returned no row.");
             }
-            await replaceScreenshotTagsBestEffort("/api/sync", insertedScreenshot.id, analysis.tags);
-            console.log("Supabase insert success (Google Drive):", insertedScreenshot.id);
 
+            console.log("Supabase insert success (Google Drive):", insertedScreenshot.id);
             sourceSynced++;
             totalSynced++;
 
-            // Broadcast new file
+            // Broadcast new file immediately
             broadcastToUser(req.user.id, {
               type: 'google:newFile',
               data: buildRealtimeScreenshotPayload({
@@ -2055,6 +2049,57 @@ app.post("/api/sync", requireAuth, rateLimit("sync", 5, 15 * 60 * 1000), async (
                 source: GOOGLE_SOURCE_TYPE,
               })
             });
+
+            // Analyze in background (don't await)
+            (async () => {
+              try {
+                const analysis = await analyzeScreenshot(
+                  buffer,
+                  resolveMimeType(file.name || `${file.id}.png`, file.mimeType),
+                );
+                const embedding = await generateEmbedding(analysis.summary + " " + analysis.ocr_text);
+
+                const { data: updatedScreenshot } = await supabase
+                  .from('screenshots')
+                  .update({
+                    category: analysis.category,
+                    summary: analysis.summary,
+                    ocr_text: analysis.ocr_text,
+                    entities: analysis.entities,
+                    embedding: embedding,
+                    is_sensitive: analysis.safety?.contains_sensitive ? 1 : 0,
+                    is_analyzed: 1,
+                    safety_reason: analysis.safety?.reason || "",
+                    last_analyzed_at: new Date().toISOString(),
+                  })
+                  .eq('id', insertedScreenshot.id)
+                  .select()
+                  .single();
+
+                await replaceScreenshotTagsBestEffort("/api/sync", insertedScreenshot.id, analysis.tags);
+
+                // Broadcast update to user
+                if (updatedScreenshot) {
+                  broadcastToUser(req.user.id, {
+                    type: 'google:updateFile',
+                    data: buildRealtimeScreenshotPayload({
+                      ...updatedScreenshot,
+                      source: GOOGLE_SOURCE_TYPE,
+                    })
+                  });
+                }
+
+                console.log("Background analysis complete (Google Drive):", insertedScreenshot.id);
+              } catch (bgErr) {
+                console.error("Background analysis failed for screenshot", insertedScreenshot.id, ":", bgErr);
+                // Mark with error status
+                await supabase
+                  .from('screenshots')
+                  .update({ category: 'Analysis Error' })
+                  .eq('id', insertedScreenshot.id)
+                  .catch(() => {});
+              }
+            })();
           } catch (err) {
             const errorMessage = err instanceof Error ? err.message : String(err);
             console.error(`Failed to sync file ${file.id}:`, err);
